@@ -57,6 +57,15 @@ const dayCount = computed(() => {
   return Number.isNaN(diff) ? 0 : Math.max(Math.floor(diff / 86400000) + 1, 0);
 });
 
+function togglePreference(list: string[], value: string) {
+  const idx = list.indexOf(value);
+  if (idx >= 0) {
+    list.splice(idx, 1);
+  } else {
+    list.push(value);
+  }
+}
+
 async function handleSubmit() {
   const payload: TripRequestPayload = {
     destination: formState.destination,
@@ -97,108 +106,124 @@ async function handleSubmit() {
 
 <template>
   <section class="home-page">
-    <div class="planner-card">
-      <div class="section-title">
-        <span class="section-title__icon">📍</span>
-        <span>目的地与日期</span>
+    <!-- 目的地与日期 -->
+    <div class="ios-card">
+      <div class="ios-card__header">
+        <span class="ios-card__icon">📍</span>
+        <span class="ios-card__title">目的地与日期</span>
       </div>
 
-      <a-row :gutter="[16, 16]">
-        <a-col :xs="24" :md="8">
-          <label class="field-label">目的地城市</label>
-          <a-input v-model:value="formState.destination" placeholder="请输入目的地" />
-        </a-col>
-        <a-col :xs="24" :md="5">
-          <label class="field-label">开始日期</label>
-          <a-input v-model:value="formState.startDate" />
-        </a-col>
-        <a-col :xs="24" :md="5">
-          <label class="field-label">结束日期</label>
-          <a-input v-model:value="formState.endDate" />
-        </a-col>
-        <a-col :xs="12" :md="3">
-          <label class="field-label">人数</label>
-          <a-input-number v-model:value="formState.travelers" :min="1" style="width: 100%" />
-        </a-col>
-        <a-col :xs="12" :md="3">
-          <label class="field-label">旅行天数</label>
-          <div class="pill-box">{{ dayCount }} 天</div>
-        </a-col>
-      </a-row>
-    </div>
-
-    <div class="planner-card">
-      <div class="section-title">
-        <span class="section-title__icon">⚙️</span>
-        <span>偏好设置</span>
+      <div class="ios-form-row">
+        <div class="ios-field ios-field--full">
+          <label class="ios-label">目的地城市</label>
+          <input v-model="formState.destination" class="ios-input" placeholder="请输入目的地" />
+        </div>
       </div>
 
-      <a-row :gutter="[16, 16]">
-        <a-col :xs="24" :md="8">
-          <label class="field-label">节奏偏好</label>
-          <a-select
-            v-model:value="formState.pace"
-            :options="[
-              { label: '轻松', value: '轻松' },
-              { label: '适中', value: '适中' },
-              { label: '紧凑', value: '紧凑' }
-            ]"
-          />
-        </a-col>
-        <a-col :xs="24" :md="8">
-          <label class="field-label">住宿偏好</label>
-          <a-select
-            v-model:value="formState.hotelLevel"
-            :options="[
-              { label: '舒适型', value: '舒适型' },
-              { label: '高档型', value: '高档型' },
-              { label: '经济型', value: '经济型' }
-            ]"
-          />
-        </a-col>
-        <a-col :xs="24" :md="8">
-          <label class="field-label">预算</label>
-          <a-input-number v-model:value="formState.budget" :min="0" style="width: 100%" />
-        </a-col>
-      </a-row>
-
-      <div class="checkbox-area">
-        <label class="field-label">旅行偏好</label>
-        <a-checkbox-group v-model:value="formState.preferences" :options="preferenceOptions" />
+      <div class="ios-form-row ios-form-row--3col">
+        <div class="ios-field">
+          <label class="ios-label">开始日期</label>
+          <input v-model="formState.startDate" class="ios-input" />
+        </div>
+        <div class="ios-field">
+          <label class="ios-label">结束日期</label>
+          <input v-model="formState.endDate" class="ios-input" />
+        </div>
+        <div class="ios-field">
+          <label class="ios-label">人数</label>
+          <input v-model.number="formState.travelers" type="number" class="ios-input" min="1" />
+        </div>
       </div>
 
-      <div class="checkbox-area">
-        <label class="field-label">饮食偏好</label>
-        <a-checkbox-group
-          v-model:value="formState.dietaryPreferences"
-          :options="dietaryOptions"
-        />
+      <div class="ios-info-row">
+        <span class="ios-info-label">旅行天数</span>
+        <span class="ios-badge">{{ dayCount }} 天</span>
       </div>
     </div>
 
-    <div class="planner-card">
-      <div class="section-title">
-        <span class="section-title__icon">💬</span>
-        <span>额外要求</span>
+    <!-- 偏好设置 -->
+    <div class="ios-card">
+      <div class="ios-card__header">
+        <span class="ios-card__icon">⚙️</span>
+        <span class="ios-card__title">偏好设置</span>
       </div>
-      <a-textarea
-        v-model:value="formState.notes"
-        :rows="4"
+
+      <div class="ios-form-row ios-form-row--3col">
+        <div class="ios-field">
+          <label class="ios-label">节奏偏好</label>
+          <select v-model="formState.pace" class="ios-select">
+            <option value="轻松">轻松</option>
+            <option value="适中">适中</option>
+            <option value="紧凑">紧凑</option>
+          </select>
+        </div>
+        <div class="ios-field">
+          <label class="ios-label">住宿偏好</label>
+          <select v-model="formState.hotelLevel" class="ios-select">
+            <option value="舒适型">舒适型</option>
+            <option value="高档型">高档型</option>
+            <option value="经济型">经济型</option>
+          </select>
+        </div>
+        <div class="ios-field">
+          <label class="ios-label">预算（元）</label>
+          <input v-model.number="formState.budget" type="number" class="ios-input" min="0" />
+        </div>
+      </div>
+
+      <div class="ios-field" style="margin-top: 16px">
+        <label class="ios-label">旅行偏好</label>
+        <div class="ios-chips">
+          <button
+            v-for="opt in preferenceOptions"
+            :key="opt"
+            :class="['ios-chip', { 'ios-chip--active': formState.preferences.includes(opt) }]"
+            @click="togglePreference(formState.preferences, opt)"
+          >
+            {{ opt }}
+          </button>
+        </div>
+      </div>
+
+      <div class="ios-field" style="margin-top: 16px">
+        <label class="ios-label">饮食偏好</label>
+        <div class="ios-chips">
+          <button
+            v-for="opt in dietaryOptions"
+            :key="opt"
+            :class="['ios-chip', { 'ios-chip--active': formState.dietaryPreferences.includes(opt) }]"
+            @click="togglePreference(formState.dietaryPreferences, opt)"
+          >
+            {{ opt }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 额外要求 -->
+    <div class="ios-card">
+      <div class="ios-card__header">
+        <span class="ios-card__icon">💬</span>
+        <span class="ios-card__title">额外要求</span>
+      </div>
+      <textarea
+        v-model="formState.notes"
+        class="ios-textarea"
+        rows="3"
         placeholder="输入想要保留的偏好、节奏和备注"
       />
     </div>
 
-    <div class="submit-panel">
+    <!-- 提交 -->
+    <div class="submit-area">
       <button
-        class="submit-panel__button"
+        class="ios-button ios-button--primary"
         :disabled="isSubmitting"
         @click="handleSubmit"
       >
         {{ isSubmitting ? "正在生成中..." : "开始规划" }}
       </button>
-      <div class="submit-panel__status">
-        当前已接上 `/trip/generate`，生成成功后会直接展示真实 itinerary。
-      </div>
+      <p class="submit-hint">生成成功后会直接展示真实行程</p>
     </div>
   </section>
 </template>
@@ -206,82 +231,192 @@ async function handleSubmit() {
 <style scoped>
 .home-page {
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
-.planner-card {
-  padding: 24px;
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 22px 55px rgba(98, 116, 164, 0.12);
-  backdrop-filter: blur(14px);
+/* iOS 卡片 */
+.ios-card {
+  padding: 20px;
+  border-radius: 12px;
+  background: #FFFFFF;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-.section-title {
+.ios-card__header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 18px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid rgba(106, 116, 215, 0.18);
-  color: #394867;
-  font-size: 16px;
-  font-weight: 700;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.06);
 }
 
-.section-title__icon {
-  font-size: 18px;
+.ios-card__icon {
+  font-size: 17px;
 }
 
-.field-label {
-  display: block;
-  margin-bottom: 8px;
-  color: #667085;
+.ios-card__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1C1C1E;
+}
+
+/* iOS 表单 */
+.ios-form-row {
+  display: grid;
+  gap: 12px;
+}
+
+.ios-form-row--3col {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.ios-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ios-field--full {
+  grid-column: 1 / -1;
+}
+
+.ios-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #8E8E93;
+}
+
+.ios-input,
+.ios-select {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #D1D1D6;
+  border-radius: 8px;
+  background: #FFFFFF;
+  font-size: 15px;
+  color: #1C1C1E;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.ios-input:focus,
+.ios-select:focus {
+  border-color: #007AFF;
+}
+
+.ios-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #D1D1D6;
+  border-radius: 8px;
+  background: #FFFFFF;
+  font-size: 15px;
+  color: #1C1C1E;
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.2s ease;
+  font-family: inherit;
+}
+
+.ios-textarea:focus {
+  border-color: #007AFF;
+}
+
+/* iOS 信息行 */
+.ios-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.06);
+}
+
+.ios-info-label {
+  font-size: 13px;
+  color: #8E8E93;
+}
+
+.ios-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: #007AFF;
+  color: #FFFFFF;
   font-size: 13px;
   font-weight: 600;
 }
 
-.pill-box {
+/* iOS Chip 标签 */
+.ios-chips {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 32px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #7386e0 0%, #8f71d8 100%);
-  color: #ffffff;
-  font-weight: 700;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.checkbox-area {
-  margin-top: 18px;
-}
-
-.submit-panel {
-  padding: 12px 8px 0;
-  text-align: center;
-}
-
-.submit-panel__button {
-  min-width: 220px;
-  border: none;
-  border-radius: 999px;
-  padding: 14px 28px;
-  background: linear-gradient(135deg, #7d8ff0 0%, #a57fd8 100%);
-  color: #ffffff;
-  font-size: 15px;
-  font-weight: 700;
+.ios-chip {
+  border: 1px solid #D1D1D6;
+  border-radius: 20px;
+  padding: 6px 14px;
+  background: #FFFFFF;
+  font-size: 13px;
+  color: #1C1C1E;
   cursor: pointer;
-  box-shadow: 0 18px 35px rgba(120, 129, 225, 0.25);
+  transition: all 0.2s ease;
 }
 
-.submit-panel__button:disabled {
-  opacity: 0.7;
+.ios-chip:active {
+  transform: scale(0.97);
+}
+
+.ios-chip--active {
+  border-color: #007AFF;
+  background: #007AFF;
+  color: #FFFFFF;
+}
+
+/* iOS 按钮 */
+.ios-button {
+  border: none;
+  border-radius: 12px;
+  padding: 14px 32px;
+  font-size: 17px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ios-button:active {
+  transform: scale(0.97);
+}
+
+.ios-button--primary {
+  background: #007AFF;
+  color: #FFFFFF;
+}
+
+.ios-button--primary:disabled {
+  opacity: 0.5;
   cursor: wait;
 }
 
-.submit-panel__status {
-  margin-top: 12px;
-  color: #6b7280;
+/* 提交区 */
+.submit-area {
+  text-align: center;
+  padding: 8px 0;
+}
+
+.submit-hint {
+  margin-top: 10px;
   font-size: 13px;
+  color: #8E8E93;
+}
+
+@media (max-width: 768px) {
+  .ios-form-row--3col {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

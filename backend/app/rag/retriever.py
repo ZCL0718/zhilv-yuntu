@@ -80,12 +80,17 @@ def _score_chunk_for_rerank(
         score -= 3
         reasons.append("domain-3:餐饮预算弱相关")
 
-    # 目的地不匹配降权：片段来源与查询目的地不一致时降权。
+    # 目的地不匹配降权：优先使用 Chunk 元数据，兼容旧 Chunk 时才退回文本判断。
     if destination:
-        chunk_lower = f"{source} {title} {text}".lower()
-        if destination.lower() not in chunk_lower:
+        chunk_destination = chunk.get("destination", "")
+        if chunk_destination and chunk_destination != destination:
             score -= 5
-            reasons.append(f"dest-5:非{destination}片段")
+            reasons.append(f"dest-5:metadata={chunk_destination}")
+        elif not chunk_destination:
+            chunk_lower = f"{source} {title} {text}".lower()
+            if destination.lower() not in chunk_lower:
+                score -= 5
+                reasons.append(f"dest-5:缺失元数据且非{destination}片段")
 
     chunk["rerank_reasons"] = reasons
     return score
@@ -324,7 +329,10 @@ def retrieve_travel_guide_chunks(
 ) -> tuple[list[dict[str, str]], dict[str, int], dict[str, int]]:
     """返回带轻量 rerank 的原始攻略片段。返回 (chunks, rerank_usage, embedding_usage)。"""
     candidate_k = max(top_k * 2, 6)
-    matched_chunks, embedding_usage = search_guide_chunks_with_usage(query=query, top_k=candidate_k)
+    search_kwargs = {"query": query, "top_k": candidate_k}
+    if destination:
+        search_kwargs["destination"] = destination
+    matched_chunks, embedding_usage = search_guide_chunks_with_usage(**search_kwargs)
     reranked_chunks, rerank_usage = rerank_guide_chunks(
         query=query, matched_chunks=matched_chunks, top_k=top_k, destination=destination
     )
@@ -332,18 +340,21 @@ def retrieve_travel_guide_chunks(
 
 
 def retrieve_travel_guide(
-    query: str, top_k: int = 3
+    query: str, top_k: int = 3, destination: str | None = None
 ) -> tuple[list[str], dict[str, int], dict[str, int]]:
     """返回最相关的攻略片段。返回 (texts, rerank_usage, embedding_usage)。"""
     empty_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-    cache_key = f"rag:guide:{_normalize_cache_text(query)}:{top_k}"
+    cache_destination = destination or "all"
+    cache_key = f"rag:guide:{cache_destination}:{_normalize_cache_text(query)}:{top_k}"
     cached_value = get_cached_json(cache_key)
     if cached_value is not None:
         logger.info("rag cache hit: query=%s top_k=%s", query, top_k)
         return [str(item) for item in cached_value], empty_usage, empty_usage
     logger.info("rag cache miss: query=%s top_k=%s", query, top_k)
 
-    matched_chunks, rerank_usage, embedding_usage = retrieve_travel_guide_chunks(query=query, top_k=top_k)
+    matched_chunks, rerank_usage, embedding_usage = retrieve_travel_guide_chunks(
+        query=query, top_k=top_k, destination=destination
+    )
 
     results: list[str] = []
     for chunk in matched_chunks:

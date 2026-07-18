@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from pydantic import BaseModel, Field
 
@@ -70,6 +71,19 @@ def _normalize_day_edit_payload(payload: dict) -> dict:
         normalized.setdefault("daily_note", notes[-1] or "")
 
     return normalized
+
+
+def _extract_entity_names(contexts: list[str], pattern: str) -> list[str]:
+    """从 RAG 上下文中提取匹配 pattern 的实体名称列表。"""
+    names: list[str] = []
+    seen: set[str] = set()
+    for ctx in contexts:
+        for match in re.finditer(pattern, ctx):
+            name = match.group(1).strip()
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+    return names
 
 
 def _extract_json_object(raw_text: str) -> str | None:
@@ -160,12 +174,19 @@ def generate_planner_draft(
 
     guide_context = "\n\n".join(rag_contexts) if rag_contexts else "暂无本地攻略上下文。"
 
+    # 从上下文中提取真实商户名，强制 LLM 使用
+    hotel_names = _extract_entity_names(rag_contexts, r"【([^】]*(?:酒店|民宿|客栈|宾馆|饭店|旅馆|旅店)[^】]*)】")
+    restaurant_names = _extract_entity_names(rag_contexts, r"【([^】]*(?:餐厅|小吃|火锅|菜|饭|面|汤|粥|粉|私房菜)[^】]*)】")
+    hotel_list = "、".join(hotel_names[:6]) if hotel_names else "暂无"
+    restaurant_list = "、".join(restaurant_names[:6]) if restaurant_names else "暂无"
+
     system_prompt = (
         "你是一名旅行规划助手。"
         "请用中文生成简洁的结构化旅行草稿。"
         "需要遵守用户给出的目的地、预算、节奏和本地攻略上下文。"
         "你必须只输出一个 JSON 对象，不要输出 Markdown，不要输出解释文字，不要输出代码块。"
         "输出内容必须严格符合给定的结构化字段要求。"
+        "餐饮和住宿必须使用上下文中提供的真实商户名称，禁止使用泛称。"
         "如果用户在额外备注里提出了明确诉求，例如看日落、不想早起、少辣、拍照等，你要优先把这些诉求落实到具体某一天的主要景点或当天安排里，而不是只写成泛泛的提示。"
         "如果用户明确提到想看日落，请优先把适合看日落的地点安排为某一天的主要景点，或至少让当天主景点与日落安排保持强关联。"
     )
@@ -186,17 +207,24 @@ def generate_planner_draft(
 本地攻略上下文：
 {guide_context}
 
+可选的真实酒店名称（住宿安排必须从中选择）：
+{hotel_list}
+
+可选的真实餐厅名称（餐饮建议必须从中选择）：
+{restaurant_list}
+
 要求：
 1. 输出一个整体 summary。
 2. 输出 {day_count} 天的 daily draft。
 3. 每天只给一个主要景点、一个餐饮建议和一条当天备注。
 4. tips 保持简洁。
 5. day_index 必须从 1 到 {day_count}。
-6. 如果额外备注里有“想看日落”“不想早起”这类明确要求，必须在 days 中体现，不要只放到 tips。
-7. 如果安排了看日落，当天的 spot_name 应尽量就是适合看日落的地点，或与 daily_note 中的日落安排保持一致，避免“主景点”和“日落地点”完全割裂。
-8. 每天的安排要符合“轻松”节奏，避免过满、避免太早出发。
-9. 餐饮建议尽量优先使用本地攻略上下文里已经出现的特色餐饮。
-10. 只返回 JSON 对象，不要返回任何额外说明，不要使用 ```json 代码块。
+6. 如果额外备注里有”想看日落””不想早起”这类明确要求，必须在 days 中体现，不要只放到 tips。
+7. 如果安排了看日落，当天的 spot_name 应尽量就是适合看日落的地点，或与 daily_note 中的日落安排保持一致，避免”主景点”和”日落地点”完全割裂。
+8. 每天的安排要符合”轻松”节奏，避免过满、避免太早出发。
+9. meal_name 必须从”可选的真实餐厅名称”列表中选择，不要用泛称。例如用”泸州幺妹私房菜(望花路店)”而不要用”当地私房菜”。
+10. 住宿安排必须从”可选的真实酒店名称”列表中选择，严禁使用”舒适型住宿””当地酒店””XX 舒适型住宿 1”等泛称。例如用”北京中关村皇冠假日酒店”而不要用”北京 舒适型住宿 1”。
+11. 只返回 JSON 对象，不要返回任何额外说明，不要使用 ```json 代码块。
 
 JSON 结构示例：
 {{

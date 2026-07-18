@@ -14,6 +14,7 @@ from app.config import (
     LLM_API_KEY,
     LLM_BASE_URL,
 )
+from app.rag.guide_catalog import destination_for_guide
 
 
 DATA_DIR = BACKEND_DIR / "data"
@@ -68,6 +69,12 @@ def load_guide_chunks() -> list[dict[str, str]]:
     """读取 backend/data 下的攻略文件，并切分成可检索片段。"""
     chunks: list[dict[str, str]] = []
     for guide_file in sorted(DATA_DIR.glob("*.md*")):
+        destination = destination_for_guide(guide_file.name)
+        if destination is None:
+            raise ValueError(
+                f"攻略文件缺少 destination 映射：{guide_file.name}。"
+                "请先在 app/rag/guide_catalog.py 中登记该文件。"
+            )
         text = guide_file.read_text(encoding="utf-8")
         raw_chunks = _split_markdown_into_chunks(text, guide_file.name)
         for chunk in raw_chunks:
@@ -77,6 +84,7 @@ def load_guide_chunks() -> list[dict[str, str]]:
                     "title": chunk["title"],
                     "text": chunk["text"],
                     "source": chunk["source"],
+                    "destination": destination,
                 }
             )
     return chunks
@@ -94,10 +102,14 @@ def _score_chunk(query: str, chunk_text: str) -> int:
     return sum(1 for keyword in keywords if keyword in chunk_text)
 
 
-def _search_guide_chunks_by_keywords(query: str, top_k: int = 3) -> list[dict[str, str]]:
+def _search_guide_chunks_by_keywords(
+    query: str, top_k: int = 3, destination: str | None = None
+) -> list[dict[str, str]]:
     """回退方案：使用关键词匹配本地攻略片段。"""
     scored_chunks: list[tuple[int, dict[str, str]]] = []
     for chunk in load_guide_chunks():
+        if destination and chunk.get("destination") != destination:
+            continue
         score = _score_chunk(query, _build_document_text(chunk))
         if score > 0:
             scored_chunks.append((score, chunk))
@@ -238,6 +250,7 @@ def ingest_guide_chunks_to_chroma() -> int:
         {
             "title": chunk["title"],
             "source": chunk["source"],
+            "destination": chunk["destination"],
         }
         for chunk in chunks
     ]
@@ -252,7 +265,7 @@ def ingest_guide_chunks_to_chroma() -> int:
 
 
 def _search_guide_chunks_by_chroma(
-    query: str, top_k: int = 3
+    query: str, top_k: int = 3, destination: str | None = None
 ) -> tuple[list[dict[str, str]], dict[str, int]]:
     """优先使用 Chroma 做向量检索，并返回在线 query embedding token。"""
     collection = _get_chroma_collection()
@@ -266,11 +279,14 @@ def _search_guide_chunks_by_chroma(
     query_embedding, embedding_usage = _embed_query_with_usage(query)
     if query_embedding is None:
         return [], empty_usage
-    result = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=top_k,
-        include=["documents", "metadatas"],
-    )
+    query_args = {
+        "query_embeddings": [query_embedding],
+        "n_results": top_k,
+        "include": ["documents", "metadatas"],
+    }
+    if destination:
+        query_args["where"] = {"destination": destination}
+    result = collection.query(**query_args)
 
     documents = result.get("documents", [[]])[0]
     metadatas = result.get("metadatas", [[]])[0]
@@ -279,12 +295,14 @@ def _search_guide_chunks_by_chroma(
     for document, metadata in zip(documents, metadatas):
         title = metadata.get("title", "未命名片段") if metadata else "未命名片段"
         source = metadata.get("source", "未知来源") if metadata else "未知来源"
+        chunk_destination = metadata.get("destination", "") if metadata else ""
         text = document.split("\n", 1)[1] if "\n" in document else document
         matched_chunks.append(
             {
                 "title": title,
                 "text": text,
                 "source": source,
+                "destination": chunk_destination,
             }
         )
 
@@ -292,7 +310,7 @@ def _search_guide_chunks_by_chroma(
 
 
 def search_guide_chunks_with_usage(
-    query: str, top_k: int = 3
+    query: str, top_k: int = 3, destination: str | None = None
 ) -> tuple[list[dict[str, str]], dict[str, int]]:
     """
     从本地攻略片段里找最相关的 top_k 条结果。
@@ -300,13 +318,21 @@ def search_guide_chunks_with_usage(
     优先走 Chroma 向量检索；如果当前环境还没准备好，再回退到关键词检索。
     """
     empty_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-    chroma_results, embedding_usage = _search_guide_chunks_by_chroma(query=query, top_k=top_k)
+    chroma_results, embedding_usage = _search_guide_chunks_by_chroma(
+        query=query, top_k=top_k, destination=destination
+    )
     if chroma_results:
         return chroma_results, embedding_usage
-    return _search_guide_chunks_by_keywords(query=query, top_k=top_k), empty_usage
+    return _search_guide_chunks_by_keywords(
+        query=query, top_k=top_k, destination=destination
+    ), empty_usage
 
 
-def search_guide_chunks(query: str, top_k: int = 3) -> list[dict[str, str]]:
+def search_guide_chunks(
+    query: str, top_k: int = 3, destination: str | None = None
+) -> list[dict[str, str]]:
     """兼容旧调用：只返回检索片段，不返回 token usage。"""
-    chunks, _ = search_guide_chunks_with_usage(query=query, top_k=top_k)
+    chunks, _ = search_guide_chunks_with_usage(
+        query=query, top_k=top_k, destination=destination
+    )
     return chunks

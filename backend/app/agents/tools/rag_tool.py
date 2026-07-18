@@ -1,6 +1,9 @@
+import json
 import logging
+from functools import lru_cache
 
 from app.config import (
+    BACKEND_DIR,
     LLM_API_KEY,
     LLM_BASE_URL,
     LLM_MAX_RETRIES,
@@ -11,6 +14,7 @@ from app.rag.retriever import retrieve_travel_guide
 
 
 logger = logging.getLogger(__name__)
+RETRIEVAL_RULES_PATH = BACKEND_DIR / "data" / "retrieval_rules.json"
 
 
 # rag_tool.py 自己不直接检索，
@@ -23,38 +27,72 @@ def _append_unique(parts: list[str], value: str) -> None:
         parts.append(normalized)
 
 
+@lru_cache(maxsize=1)
+def _load_retrieval_rules() -> dict:
+    """读取版本化检索规则；配置损坏时保持空规则，避免阻断主链路。"""
+    try:
+        raw_data = json.loads(RETRIEVAL_RULES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Unable to load retrieval rules from %s: %s", RETRIEVAL_RULES_PATH, exc)
+        return {"global_rules": [], "destinations": {}}
+
+    if not isinstance(raw_data, dict):
+        logger.warning("Retrieval rules must be a JSON object: %s", RETRIEVAL_RULES_PATH)
+        return {"global_rules": [], "destinations": {}}
+
+    return raw_data
+
+
+def _valid_rules(value: object) -> list[dict[str, list[str]]]:
+    """过滤格式错误的单条规则，保证规则配置不会破坏 query fallback。"""
+    if not isinstance(value, list):
+        return []
+
+    valid_rules: list[dict[str, list[str]]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        triggers = item.get("triggers")
+        keywords = item.get("keywords")
+        if not isinstance(triggers, list) or not isinstance(keywords, list):
+            continue
+        if not all(isinstance(term, str) for term in [*triggers, *keywords]):
+            continue
+        if triggers and keywords:
+            valid_rules.append({"triggers": triggers, "keywords": keywords})
+    return valid_rules
+
+
+def _destination_rules(destination: str | None) -> list[dict[str, list[str]]]:
+    """返回通用规则及当前目的地规则，兼容“大理市”等输入。"""
+    config = _load_retrieval_rules()
+    rules = _valid_rules(config.get("global_rules"))
+    if not destination:
+        return rules
+
+    destinations = config.get("destinations")
+    if not isinstance(destinations, dict):
+        return rules
+
+    for configured_destination, destination_config in destinations.items():
+        if not isinstance(configured_destination, str) or configured_destination not in destination:
+            continue
+        if not isinstance(destination_config, dict):
+            continue
+        rules.extend(_valid_rules(destination_config.get("rules")))
+    return rules
+
+
 def _extract_note_keywords(special_notes: str | None, destination: str | None = None) -> list[str]:
-    """从用户备注里提炼更适合检索的关键词，而不是直接拼整句。"""
+    """根据版本化规则，从用户备注中提炼适合检索的关键词。"""
     if not special_notes:
         return []
 
     keywords: list[str] = []
     note = special_notes.strip()
-
-    # 格式：(触发词, 目的地过滤, 输出关键词)
-    # 目的地为 None 表示通用，不限目的地
-    rule_keywords = [
-        (("日落", "傍晚"), "大理", ["日落", "傍晚", "洱海", "双廊"]),
-        (("日出", "清晨"), "大理", ["日出", "才村", "龙龛"]),
-        (("拍照", "出片", "摄影"), None, ["拍照", "摄影", "出片"]),
-        (("美食", "小吃", "吃"), None, ["美食", "小吃"]),
-        (("轻松", "慢节奏", "休闲"), None, ["轻松", "慢节奏", "休闲"]),
-        (("不想太早起床", "睡到自然醒"), None, ["轻松", "慢节奏"]),
-        (("古镇",), "大理", ["古镇", "大理古城", "喜洲古镇"]),
-        (("古镇",), "西安", ["古镇", "回民街"]),
-        (("古镇",), "厦门", ["古镇", "鼓浪屿", "曾厝垵"]),
-        (("骑行",), "大理", ["骑行", "洱海生态廊道"]),
-        (("骑行",), "厦门", ["骑行", "环岛路"]),
-        (("熊猫", "大熊猫"), "成都", ["大熊猫", "熊猫"]),
-        (("潜水",), "三亚", ["潜水", "蜈支洲岛"]),
-        (("海鲜",), "三亚", ["海鲜", "第一市场"]),
-    ]
-
-    for triggers, required_dest, values in rule_keywords:
-        if required_dest and destination and required_dest not in destination:
-            continue
-        if any(trigger in note for trigger in triggers):
-            for value in values:
+    for rule in _destination_rules(destination):
+        if any(trigger in note for trigger in rule["triggers"]):
+            for value in rule["keywords"]:
                 _append_unique(keywords, value)
 
     return keywords
@@ -161,7 +199,7 @@ def _rule_based_query(
     for keyword in _extract_note_keywords(special_notes, destination=destination):
         _append_unique(parts, keyword)
 
-    for stable_term in ["景点", "行程", "攻略", "推荐"]:
+    for stable_term in ["景点", "行程", "攻略", "推荐", "餐饮", "住宿"]:
         _append_unique(parts, stable_term)
 
     return " ".join(part for part in parts if part).strip()
@@ -221,5 +259,23 @@ def get_destination_guide_context(
         pace=pace,
         special_notes=special_notes,
     )
-    contexts, rerank_usage, embedding_usage = retrieve_travel_guide(query=query, top_k=top_k)
+    contexts, rerank_usage, embedding_usage = retrieve_travel_guide(
+        query=query, top_k=top_k, destination=destination
+    )
+
+    # 补充检索住宿和餐饮 chunk，确保 LLM 能获取真实商户名
+    existing_set = set(contexts)
+    for supplement_query in [f"{destination} 住宿 酒店 民宿", f"{destination} 餐饮 美食 餐厅"]:
+        extra_contexts, extra_rerank, extra_embed = retrieve_travel_guide(
+            query=supplement_query, top_k=2, destination=destination
+        )
+        for ctx in extra_contexts:
+            if ctx not in existing_set:
+                contexts.append(ctx)
+                existing_set.add(ctx)
+        rerank_usage["prompt_tokens"] += extra_rerank.get("prompt_tokens", 0)
+        rerank_usage["completion_tokens"] += extra_rerank.get("completion_tokens", 0)
+        embedding_usage["prompt_tokens"] += extra_embed.get("prompt_tokens", 0)
+        embedding_usage["completion_tokens"] += extra_embed.get("completion_tokens", 0)
+
     return contexts, rewrite_usage, rerank_usage, embedding_usage

@@ -31,84 +31,53 @@ const editInstruction = ref("这一天节奏更轻松一点，减少固定安排
 const weatherLoading = ref(false);
 const weatherError = ref("");
 const weather = ref<WeatherForecastResponse | null>(null);
+const failedImageKeys = ref(new Set<string>());
 
 function formatShortDate(dateText?: string | null): string {
-  if (!dateText) {
-    return "待定";
-  }
-
+  if (!dateText) return "待定";
   const parts = dateText.split("-");
-  if (parts.length !== 3) {
-    return dateText;
-  }
-
-  return `${parts[1]}-${parts[2]}`;
+  return parts.length !== 3 ? dateText : `${parts[1]}-${parts[2]}`;
 }
 
 function formatWeatherDate(dateText?: string | null, week?: string | null): string {
   const weekdayMap: Record<string, string> = {
-    "1": "周一",
-    "2": "周二",
-    "3": "周三",
-    "4": "周四",
-    "5": "周五",
-    "6": "周六",
-    "7": "周日",
+    "1": "周一", "2": "周二", "3": "周三", "4": "周四",
+    "5": "周五", "6": "周六", "7": "周日",
   };
   const weekday = week ? weekdayMap[week] || `周${week}` : "";
   return [formatShortDate(dateText), weekday].filter(Boolean).join(" ");
 }
 
 const budgetItems = computed(() => {
-  if (!props.itinerary) {
-    return [];
-  }
-
-  const budget = props.itinerary.budget_breakdown;
+  if (!props.itinerary) return [];
+  const b = props.itinerary.budget_breakdown;
   return [
-    { label: "景点门票", value: `¥${budget.tickets.toFixed(0)}` },
-    { label: "酒店住宿", value: `¥${budget.hotel.toFixed(0)}` },
-    { label: "餐饮费用", value: `¥${budget.meals.toFixed(0)}` },
-    { label: "交通费用", value: `¥${budget.transport.toFixed(0)}` },
+    { label: "景点门票", value: `¥${b.tickets.toFixed(0)}` },
+    { label: "酒店住宿", value: `¥${b.hotel.toFixed(0)}` },
+    { label: "餐饮费用", value: `¥${b.meals.toFixed(0)}` },
+    { label: "交通费用", value: `¥${b.transport.toFixed(0)}` },
   ];
 });
 
 const dayBudgetItems = computed(() => {
-  if (!props.itinerary) {
-    return [];
-  }
-
+  if (!props.itinerary) return [];
   return props.itinerary.days.map((day) => {
-    const tickets = day.spots.reduce((sum, spot) => sum + (spot.estimated_cost ?? 0), 0);
-    const meals = day.meals.reduce((sum, meal) => sum + (meal.estimated_cost ?? 0), 0);
-    const transport = day.transport.reduce((sum, item) => sum + (item.estimated_cost ?? 0), 0);
+    const tickets = day.spots.reduce((s, sp) => s + (sp.estimated_cost ?? 0), 0);
+    const meals = day.meals.reduce((s, m) => s + (m.estimated_cost ?? 0), 0);
+    const transport = day.transport.reduce((s, t) => s + (t.estimated_cost ?? 0), 0);
     const hotel = day.hotel?.estimated_cost ?? 0;
-    const total = tickets + meals + transport + hotel;
-
-    return {
-      key: day.day_index,
-      title: `第${day.day_index}天`,
-      subtitle: day.theme || "未命名主题",
-      tickets,
-      meals,
-      transport,
-      hotel,
-      total,
-    };
+    return { key: day.day_index, title: `第${day.day_index}天`, subtitle: day.theme || "", tickets, meals, transport, hotel, total: tickets + meals + transport + hotel };
   });
 });
 
 const mapPoints = computed(() => {
-  if (!props.itinerary) {
-    return [];
-  }
-
+  if (!props.itinerary) return [];
   return props.itinerary.days.flatMap((day) =>
     day.spots.map((spot) => ({
       key: `${day.day_index}-${spot.name}`,
       dayIndex: day.day_index,
       date: day.date || "待定",
-      theme: day.theme || "未命名主题",
+      theme: day.theme || "",
       name: spot.name,
       address: spot.address || spot.location || "待补充",
       latitude: spot.latitude,
@@ -120,467 +89,238 @@ const mapPoints = computed(() => {
   );
 });
 
-const technicalTipKeywords = [
-  "LLM",
-  "RAG",
-  "LangChain",
-  "Chroma",
-  "演示",
-  "测试",
-  "规则",
-  "模型",
-  "源码",
-];
-
+const technicalTipKeywords = ["LLM", "RAG", "LangChain", "Chroma", "演示", "测试", "规则", "模型", "源码"];
 const rainWeatherKeywords = ["雨", "阵雨", "雷阵雨", "小雨", "中雨", "大雨"];
 const sunnyTipKeywords = ["防晒", "太阳", "日照", "晒"];
 
 const weatherText = computed(() => {
-  if (!weather.value) {
-    return "";
-  }
-
-  return weather.value.days
-    .map((day) => `${day.day_weather || ""}${day.night_weather || ""}`)
-    .join(" ");
+  if (!weather.value) return "";
+  return weather.value.days.map((d) => `${d.day_weather || ""}${d.night_weather || ""}`).join(" ");
 });
 
-const hasRainyWeather = computed(() => {
-  return rainWeatherKeywords.some((keyword) => weatherText.value.includes(keyword));
-});
+const hasRainyWeather = computed(() => rainWeatherKeywords.some((k) => weatherText.value.includes(k)));
 
 const displayTips = computed(() => {
-  if (!props.itinerary) {
-    return [];
-  }
-
-  const tips = props.itinerary.tips
-    .map((tip) => tip.trim())
-    .filter(Boolean)
-    .filter((tip) => !technicalTipKeywords.some((keyword) => tip.includes(keyword)));
-
-  const weatherAwareTips = hasRainyWeather.value
-    ? tips.filter((tip) => !sunnyTipKeywords.some((keyword) => tip.includes(keyword)))
-    : tips;
-
+  if (!props.itinerary) return [];
+  const tips = props.itinerary.tips.map((t) => t.trim()).filter(Boolean).filter((t) => !technicalTipKeywords.some((k) => t.includes(k)));
+  const weatherAware = hasRainyWeather.value ? tips.filter((t) => !sunnyTipKeywords.some((k) => t.includes(k))) : tips;
   if (hasRainyWeather.value) {
-    weatherAwareTips.push("天气可能有雨，建议随身带伞或轻便雨衣。");
-    weatherAwareTips.push("阴雨天路面湿滑，洱海边和古镇石板路建议穿防滑鞋。");
+    weatherAware.push("天气可能有雨，建议随身带伞或轻便雨衣。");
+    weatherAware.push("阴雨天路面湿滑，建议穿防滑鞋。");
   }
-
-  const uniqueTips = Array.from(new Set(weatherAwareTips));
-  if (uniqueTips.length) {
-    return uniqueTips;
-  }
-
-  return [
-    `建议根据${props.itinerary.destination}当天实时天气准备雨具或薄外套。`,
-    "古镇、生态廊道和石板路更适合慢慢走，鞋子尽量选择舒适防滑的款式。",
-  ];
+  return Array.from(new Set(weatherAware));
 });
 
 function buildVisibleItinerary(): Itinerary | null {
-  if (!props.itinerary) {
-    return null;
-  }
+  if (!props.itinerary) return null;
+  return { ...props.itinerary, tips: displayTips.value };
+}
 
-  return {
-    ...props.itinerary,
-    tips: displayTips.value,
-  };
+function markImageAsFailed(pointKey: string) {
+  failedImageKeys.value = new Set([...failedImageKeys.value, pointKey]);
 }
 
 async function loadWeather() {
-  if (!props.itinerary?.destination) {
-    weather.value = null;
-    return;
-  }
-
+  if (!props.itinerary?.destination) { weather.value = null; return; }
   weatherLoading.value = true;
   weatherError.value = "";
-  try {
-    weather.value = await fetchWeatherForecast(props.itinerary.destination);
-  } catch (error) {
-    console.error(error);
-    weather.value = null;
-    weatherError.value = "天气信息加载失败。";
-  } finally {
-    weatherLoading.value = false;
-  }
+  try { weather.value = await fetchWeatherForecast(props.itinerary.destination); }
+  catch { weather.value = null; weatherError.value = "天气信息加载失败。"; }
+  finally { weatherLoading.value = false; }
 }
 
-watch(
-  () => props.itinerary?.destination,
-  () => {
-    void loadWeather();
-  },
-  { immediate: true }
-);
-
-watch(
-  () => props.itinerary?.trip_id,
-  () => {
-    const firstDay = props.itinerary?.days[0];
-    editScope.value = firstDay ? `day_${firstDay.day_index}` : "day_1";
-  },
-  { immediate: true }
-);
+watch(() => props.itinerary?.destination, () => { void loadWeather(); }, { immediate: true });
+watch(() => props.itinerary?.trip_id, () => {
+  const first = props.itinerary?.days[0];
+  editScope.value = first ? `day_${first.day_index}` : "day_1";
+}, { immediate: true });
 
 async function openPdfExport() {
-  const itineraryToExport = buildVisibleItinerary();
-  if (!itineraryToExport) {
-    return;
-  }
-
-  const exportWindow = window.open("about:blank", "_blank");
+  const it = buildVisibleItinerary(); if (!it) return;
+  const w = window.open("about:blank", "_blank");
   exportingPdf.value = true;
-  try {
-    await saveTrip(itineraryToExport);
-    const exportUrl = getPdfExportUrl(itineraryToExport.trip_id);
-    if (exportWindow) {
-      exportWindow.location.href = exportUrl;
-    } else {
-      window.location.href = exportUrl;
-    }
-  } catch (error) {
-    console.error(error);
-    exportWindow?.close();
-    message.error("导出 PDF 前同步当前行程失败。");
-  } finally {
-    exportingPdf.value = false;
-  }
+  try { await saveTrip(it); if (w) w.location.href = getPdfExportUrl(it.trip_id); }
+  catch { w?.close(); message.error("导出 PDF 前同步当前行程失败。"); }
+  finally { exportingPdf.value = false; }
 }
 
 async function openMarkdownExport() {
-  const itineraryToExport = buildVisibleItinerary();
-  if (!itineraryToExport) {
-    return;
-  }
-
-  const exportWindow = window.open("about:blank", "_blank");
+  const it = buildVisibleItinerary(); if (!it) return;
+  const w = window.open("about:blank", "_blank");
   exportingMarkdown.value = true;
-  try {
-    await saveTrip(itineraryToExport);
-    const exportUrl = getMarkdownExportUrl(itineraryToExport.trip_id);
-    if (exportWindow) {
-      exportWindow.location.href = exportUrl;
-    } else {
-      window.location.href = exportUrl;
-    }
-  } catch (error) {
-    console.error(error);
-    exportWindow?.close();
-    message.error("导出 Markdown 前同步当前行程失败。");
-  } finally {
-    exportingMarkdown.value = false;
-  }
+  try { await saveTrip(it); if (w) w.location.href = getMarkdownExportUrl(it.trip_id); }
+  catch { w?.close(); message.error("导出 Markdown 前同步当前行程失败。"); }
+  finally { exportingMarkdown.value = false; }
 }
 
 async function handleSave() {
-  const itineraryToSave = buildVisibleItinerary();
-  if (!itineraryToSave) {
-    return;
-  }
-
+  const it = buildVisibleItinerary(); if (!it) return;
   saving.value = true;
-  try {
-    await saveTrip(itineraryToSave);
-    message.success("行程已保存，可以去历史列表查看。");
-  } catch (error) {
-    console.error(error);
-    message.error("保存行程失败。");
-  } finally {
-    saving.value = false;
-  }
+  try { await saveTrip(it); message.success("行程已保存。"); }
+  catch { message.error("保存行程失败。"); }
+  finally { saving.value = false; }
 }
 
 async function handleEdit() {
-  if (!props.itinerary) {
-    return;
-  }
-
+  if (!props.itinerary) return;
   const instruction = editInstruction.value.trim();
-  if (!instruction) {
-    message.warning("请先输入想如何调整行程。");
-    return;
-  }
-
+  if (!instruction) { message.warning("请先输入想如何调整行程。"); return; }
   editing.value = true;
   try {
-    const updatedItinerary = await editTrip({
-      trip_id: props.itinerary.trip_id,
-      current_itinerary: props.itinerary,
-      user_instruction: instruction,
-      edit_scope: editScope.value,
-      preserve_constraints: ["保留预算结构", "保留目的地和旅行日期"],
-    });
-    emit("updated", updatedItinerary);
+    const updated = await editTrip({ trip_id: props.itinerary.trip_id, current_itinerary: props.itinerary, user_instruction: instruction, edit_scope: editScope.value, preserve_constraints: ["保留预算结构", "保留目的地和旅行日期"] });
+    emit("updated", updated);
     message.success("行程已智能调整。");
-  } catch (error) {
-    console.error(error);
-    message.error("智能调整失败，请稍后再试。");
-  } finally {
-    editing.value = false;
-  }
+  } catch { message.error("智能调整失败。"); }
+  finally { editing.value = false; }
 }
 </script>
 
 <template>
   <section v-if="itinerary" class="result-page">
-    <aside class="sidebar-card">
-      <div class="sidebar-card__title">行程导航</div>
-      <ul class="sidebar-list">
-        <li>行程概览</li>
-        <li>预算明细</li>
-        <li>按天花费</li>
-        <li>智能调整</li>
-        <li>景点地图</li>
-        <li>天气信息</li>
-        <li>点位明细</li>
-        <li>每日行程</li>
-      </ul>
-
-      <div class="sidebar-actions">
-        <button class="back-button" @click="$emit('backHome')">返回规划页</button>
-        <button class="save-button" :disabled="saving" @click="handleSave">
-          {{ saving ? "保存中..." : "保存行程" }}
-        </button>
-        <button class="history-button" @click="$emit('viewHistory')">历史列表</button>
-        <button class="export-button" :disabled="exportingPdf" @click="openPdfExport">
-          {{ exportingPdf ? "准备 PDF..." : "导出 PDF" }}
-        </button>
-        <button
-          class="export-button export-button--light"
-          :disabled="exportingMarkdown"
-          @click="openMarkdownExport"
-        >
-          {{ exportingMarkdown ? "准备中..." : "导出 Markdown" }}
-        </button>
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="sidebar__section">
+        <div class="sidebar__label">操作</div>
+        <button class="ios-btn ios-btn--text" @click="$emit('backHome')">← 返回规划</button>
+        <button class="ios-btn ios-btn--text" :disabled="saving" @click="handleSave">{{ saving ? "保存中..." : "保存行程" }}</button>
+        <button class="ios-btn ios-btn--text" @click="$emit('viewHistory')">历史列表</button>
+      </div>
+      <div class="sidebar__divider" />
+      <div class="sidebar__section">
+        <div class="sidebar__label">导出</div>
+        <button class="ios-btn ios-btn--text" :disabled="exportingPdf" @click="openPdfExport">{{ exportingPdf ? "准备中..." : "导出 PDF" }}</button>
+        <button class="ios-btn ios-btn--text" :disabled="exportingMarkdown" @click="openMarkdownExport">{{ exportingMarkdown ? "准备中..." : "导出 Markdown" }}</button>
       </div>
     </aside>
 
-    <div class="result-grid">
-      <section class="result-card">
-        <div class="result-card__title">{{ itinerary.destination }}旅行计划</div>
-        <div class="info-row"><strong>行程 ID：</strong>{{ itinerary.trip_id }}</div>
-        <div class="info-row">
-          <strong>日期：</strong>
-          {{ itinerary.days[0]?.date || "待定" }} 至
-          {{ itinerary.days[itinerary.days.length - 1]?.date || "待定" }}
+    <!-- 主内容 -->
+    <div class="result-content">
+      <!-- 行程概览 -->
+      <div class="ios-card">
+        <h2 class="ios-card__title">{{ itinerary.destination }}旅行计划</h2>
+        <div class="ios-info"><span class="ios-info__label">行程 ID</span><span>{{ itinerary.trip_id }}</span></div>
+        <div class="ios-info"><span class="ios-info__label">日期</span><span>{{ itinerary.days[0]?.date || "待定" }} 至 {{ itinerary.days[itinerary.days.length - 1]?.date || "待定" }}</span></div>
+        <p class="ios-summary">{{ itinerary.summary }}</p>
+        <div v-if="displayTips.length" class="ios-tips">
+          <div class="ios-tips__title">旅行提示</div>
+          <ul><li v-for="tip in displayTips" :key="tip">{{ tip }}</li></ul>
         </div>
-        <div class="info-row"><strong>地点：</strong>{{ itinerary.destination }}</div>
-        <div class="info-row summary-text">{{ itinerary.summary }}</div>
-        <div v-if="displayTips.length" class="overview-tips">
-          <div class="overview-tips__title">旅行提示</div>
-          <ul>
-            <li v-for="tip in displayTips" :key="tip">{{ tip }}</li>
-          </ul>
-        </div>
-      </section>
+      </div>
 
-      <section class="result-card">
-        <div class="result-card__title">预算明细</div>
-        <div class="budget-grid">
-          <div v-for="item in budgetItems" :key="item.label" class="budget-box">
-            <div class="budget-box__label">{{ item.label }}</div>
-            <div class="budget-box__value">{{ item.value }}</div>
+      <!-- 预算 -->
+      <div class="ios-card">
+        <div class="ios-card__header">预算明细</div>
+        <div class="ios-budget-grid">
+          <div v-for="item in budgetItems" :key="item.label" class="ios-budget-item">
+            <span class="ios-budget-item__label">{{ item.label }}</span>
+            <span class="ios-budget-item__value">{{ item.value }}</span>
           </div>
         </div>
-        <div class="budget-total">
+        <div class="ios-budget-total">
           <span>预估总费用</span>
           <strong>¥{{ itinerary.estimated_budget.toFixed(0) }}</strong>
         </div>
-      </section>
+      </div>
 
-      <section class="result-card result-card--map">
-        <div class="result-card__title">景点地图</div>
+      <!-- 地图 -->
+      <div class="ios-card ios-card--map">
+        <div class="ios-card__header">景点地图</div>
         <AmapTripMap :points="mapPoints" />
-      </section>
+      </div>
 
-      <section class="result-card result-card--weather">
-        <div class="result-card__title">天气信息</div>
-
-        <div v-if="weatherLoading" class="weather-state">正在加载天气信息...</div>
-        <div v-else-if="weatherError" class="weather-state">{{ weatherError }}</div>
-        <div v-else-if="weather" class="weather-grid">
-          <article
-            v-for="day in weather.days"
-            :key="`${day.date}-${day.week}`"
-            class="weather-card"
-          >
-            <div class="weather-card__date">
-              {{ formatWeatherDate(day.date, day.week) }}
-            </div>
-            <div class="weather-card__temp">
-              {{ day.day_temp || "-" }}° / {{ day.night_temp || "-" }}°
-            </div>
-            <div class="weather-card__desc">白天：{{ day.day_weather || "未知" }}</div>
-            <div class="weather-card__desc">夜间：{{ day.night_weather || "未知" }}</div>
-          </article>
-        </div>
-        <div v-else class="weather-state">暂无天气信息。</div>
-      </section>
-
-      <section class="result-card result-card--full">
-        <div class="result-card__title">智能调整行程</div>
-        <div class="edit-panel">
-          <div class="edit-panel__controls">
-            <label class="edit-field">
-              <span>调整范围</span>
-              <select v-model="editScope">
-                <option
-                  v-for="day in itinerary.days"
-                  :key="day.day_index"
-                  :value="`day_${day.day_index}`"
-                >
-                  第{{ day.day_index }}天 · {{ day.theme || "未命名主题" }}
-                </option>
-              </select>
-            </label>
-            <button
-              class="edit-submit-button"
-              :disabled="editing"
-              @click="handleEdit"
-            >
-              {{ editing ? "调整中..." : "智能调整" }}
-            </button>
+      <!-- 天气 -->
+      <div class="ios-card">
+        <div class="ios-card__header">天气信息</div>
+        <div v-if="weatherLoading" class="ios-empty">正在加载...</div>
+        <div v-else-if="weatherError" class="ios-empty">{{ weatherError }}</div>
+        <div v-else-if="weather" class="ios-weather-grid">
+          <div v-for="day in weather.days" :key="`${day.date}-${day.week}`" class="ios-weather-item">
+            <div class="ios-weather-item__date">{{ formatWeatherDate(day.date, day.week) }}</div>
+            <div class="ios-weather-item__temp">{{ day.day_temp || "-" }}° / {{ day.night_temp || "-" }}°</div>
+            <div class="ios-weather-item__desc">{{ day.day_weather || "未知" }} / {{ day.night_weather || "未知" }}</div>
           </div>
-          <textarea
-            v-model="editInstruction"
-            class="edit-textarea"
-            rows="3"
-            placeholder="例如：第二天轻松一点，不要安排太满；第三天想换成适合看日落的地点。"
-          ></textarea>
         </div>
-      </section>
+        <div v-else class="ios-empty">暂无天气信息</div>
+      </div>
 
-      <section class="result-card result-card--full">
-        <div class="result-card__title">按天花费</div>
-        <div class="day-budget-grid">
-          <article
-            v-for="item in dayBudgetItems"
-            :key="item.key"
-            class="day-budget-card"
-          >
-            <div class="day-budget-card__header">
-              <span>{{ item.title }}</span>
-              <span>{{ item.subtitle }}</span>
-            </div>
-            <div class="day-budget-card__body">
-              <div class="day-budget-row">
-                <span>门票</span>
-                <strong>¥{{ item.tickets.toFixed(0) }}</strong>
-              </div>
-              <div class="day-budget-row">
-                <span>餐饮</span>
-                <strong>¥{{ item.meals.toFixed(0) }}</strong>
-              </div>
-              <div class="day-budget-row">
-                <span>交通</span>
-                <strong>¥{{ item.transport.toFixed(0) }}</strong>
-              </div>
-              <div class="day-budget-row">
-                <span>住宿</span>
-                <strong>¥{{ item.hotel.toFixed(0) }}</strong>
-              </div>
-              <div class="day-budget-row day-budget-row--total">
-                <span>当日合计</span>
-                <strong>¥{{ item.total.toFixed(0) }}</strong>
-              </div>
-            </div>
-          </article>
+      <!-- 智能调整 -->
+      <div class="ios-card ios-card--full">
+        <div class="ios-card__header">智能调整行程</div>
+        <div class="ios-edit-row">
+          <select v-model="editScope" class="ios-select">
+            <option v-for="day in itinerary.days" :key="day.day_index" :value="`day_${day.day_index}`">第{{ day.day_index }}天 · {{ day.theme || "" }}</option>
+          </select>
+          <button class="ios-btn ios-btn--primary ios-btn--sm" :disabled="editing" @click="handleEdit">{{ editing ? "调整中..." : "智能调整" }}</button>
         </div>
-      </section>
+        <textarea v-model="editInstruction" class="ios-textarea" rows="2" placeholder="例如：第二天轻松一点，不要安排太满。" />
+      </div>
 
-      <section class="result-card result-card--full">
-        <div class="result-card__title">地图点位明细</div>
-        <div class="point-grid">
-          <article v-for="point in mapPoints" :key="point.key" class="point-card">
-            <div class="point-card__header">
-              <span>第{{ point.dayIndex }}天 · {{ point.name }}</span>
-              <span>{{ formatShortDate(point.date) }}</span>
+      <!-- 按天花费 -->
+      <div class="ios-card ios-card--full">
+        <div class="ios-card__header">按天花费</div>
+        <div class="ios-day-budget-grid">
+          <div v-for="item in dayBudgetItems" :key="item.key" class="ios-day-budget">
+            <div class="ios-day-budget__head"><span>{{ item.title }}</span><span>{{ item.subtitle }}</span></div>
+            <div class="ios-day-budget__body">
+              <div class="ios-row-between"><span>门票</span><span>¥{{ item.tickets.toFixed(0) }}</span></div>
+              <div class="ios-row-between"><span>餐饮</span><span>¥{{ item.meals.toFixed(0) }}</span></div>
+              <div class="ios-row-between"><span>交通</span><span>¥{{ item.transport.toFixed(0) }}</span></div>
+              <div class="ios-row-between"><span>住宿</span><span>¥{{ item.hotel.toFixed(0) }}</span></div>
+              <div class="ios-row-between ios-row-between--bold"><span>当日合计</span><span>¥{{ item.total.toFixed(0) }}</span></div>
             </div>
-
-            <div class="point-card__body">
-              <div
-                v-if="point.imageUrl"
-                class="point-card__image"
-                :style="{ backgroundImage: `url(${point.imageUrl})` }"
-              ></div>
-              <div v-else class="point-card__image point-card__image--empty">
-                暂无景点图片
-              </div>
-              <div class="point-card__line">
-                <strong>主题：</strong>
-                <span>{{ point.theme }}</span>
-              </div>
-              <div class="point-card__line">
-                <strong>地址：</strong>
-                <span>{{ point.address }}</span>
-              </div>
-              <div class="point-card__desc">{{ point.description }}</div>
-            </div>
-          </article>
+          </div>
         </div>
-      </section>
+      </div>
 
-      <section class="result-card result-card--full">
-        <div class="result-card__title">每日行程</div>
-        <div class="day-list">
-          <details
-            v-for="day in itinerary.days"
-            :key="day.day_index"
-            class="day-card"
-            :open="day.day_index === 1"
-          >
-            <summary class="day-card__header">
-              <span>第{{ day.day_index }}天 · {{ day.theme || "未命名主题" }}</span>
-              <span class="day-card__meta">{{ formatShortDate(day.date) }}</span>
+      <!-- 地图点位明细 -->
+      <div class="ios-card ios-card--full">
+        <div class="ios-card__header">地图点位明细</div>
+        <div class="ios-point-grid">
+          <div v-for="point in mapPoints" :key="point.key" class="ios-point">
+            <div class="ios-point__head"><span>第{{ point.dayIndex }}天 · {{ point.name }}</span><span>{{ formatShortDate(point.date) }}</span></div>
+            <img
+              v-if="point.imageUrl && !failedImageKeys.has(point.key)"
+              class="ios-point__img"
+              :src="point.imageUrl"
+              :alt="`${point.name} 图片`"
+              @error="markImageAsFailed(point.key)"
+            />
+            <div v-else class="ios-point__img ios-point__img--empty">暂无图片</div>
+            <div class="ios-point__info"><span class="ios-muted">主题：</span>{{ point.theme }}</div>
+            <div class="ios-point__info"><span class="ios-muted">地址：</span>{{ point.address }}</div>
+            <div class="ios-point__desc">{{ point.description }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 每日行程 -->
+      <div class="ios-card ios-card--full">
+        <div class="ios-card__header">每日行程</div>
+        <div class="ios-day-list">
+          <details v-for="day in itinerary.days" :key="day.day_index" class="ios-day" :open="day.day_index === 1">
+            <summary class="ios-day__head">
+              <span>第{{ day.day_index }}天 · {{ day.theme || "" }}</span>
+              <span class="ios-muted">{{ formatShortDate(day.date) }}</span>
             </summary>
-
-            <div class="day-card__body">
-              <div class="day-card__section">
-                <strong>主要景点：</strong>
-                <span>{{ day.spots[0]?.name || "未安排" }}</span>
-              </div>
-              <div class="day-card__section">
-                <strong>景点地址：</strong>
-                <span>{{ day.spots[0]?.address || day.spots[0]?.location || "待补充" }}</span>
-              </div>
-              <div class="day-card__section">
-                <strong>餐饮建议：</strong>
-                <span>{{ day.meals[0]?.name || "未安排" }}</span>
-              </div>
-              <div class="day-card__section">
-                <strong>住宿安排：</strong>
-                <span>{{ day.hotel?.name || "未安排" }}</span>
-              </div>
-              <div class="day-card__section">
-                <strong>交通信息：</strong>
-                <span>
-                  {{
-                    day.transport[0]?.distance_km != null
-                      ? `${day.transport[0].distance_km.toFixed(2)} km / ${day.transport[0].estimated_minutes ?? 0} 分钟`
-                      : day.transport[0]?.duration || "待补充"
-                  }}
-                </span>
-              </div>
-              <div class="day-card__section">
-                <strong>备注：</strong>
-                <span>{{ day.notes[day.notes.length - 1] || "无" }}</span>
-              </div>
+            <div class="ios-day__body">
+              <div><span class="ios-muted">主要景点：</span>{{ day.spots[0]?.name || "未安排" }}</div>
+              <div><span class="ios-muted">景点地址：</span>{{ day.spots[0]?.address || day.spots[0]?.location || "待补充" }}</div>
+              <div><span class="ios-muted">餐饮建议：</span>{{ day.meals[0]?.name || "未安排" }}</div>
+              <div><span class="ios-muted">住宿安排：</span>{{ day.hotel?.name || "未安排" }}</div>
+              <div><span class="ios-muted">交通信息：</span>{{ day.transport[0]?.distance_km != null ? `${day.transport[0].distance_km.toFixed(2)} km / ${day.transport[0].estimated_minutes ?? 0} 分钟` : day.transport[0]?.duration || "待补充" }}</div>
+              <div><span class="ios-muted">备注：</span>{{ day.notes[day.notes.length - 1] || "无" }}</div>
             </div>
           </details>
         </div>
-      </section>
+      </div>
     </div>
   </section>
 
   <section v-else class="empty-state">
-    <div class="empty-state__card">
-      <h2>还没有生成结果</h2>
-      <p>先回到规划页生成一条 itinerary，结果页就会开始展示真实数据。</p>
-      <button class="back-button" @click="$emit('backHome')">返回规划页</button>
+    <div class="ios-card" style="text-align:center; max-width:480px; margin:80px auto;">
+      <h2 style="margin:0 0 12px;">还没有生成结果</h2>
+      <p class="ios-muted" style="margin:0 0 20px;">先回到规划页生成一条行程。</p>
+      <button class="ios-btn ios-btn--primary" @click="$emit('backHome')">返回规划页</button>
     </div>
   </section>
 </template>
@@ -588,481 +328,364 @@ async function handleEdit() {
 <style scoped>
 .result-page {
   display: grid;
-  grid-template-columns: 200px 1fr;
-  gap: 22px;
+  grid-template-columns: 180px 1fr;
+  gap: 16px;
 }
 
-.sidebar-card,
-.result-card,
-.empty-state__card {
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 22px 55px rgba(98, 116, 164, 0.12);
-  backdrop-filter: blur(14px);
-}
-
-.sidebar-card {
+/* 侧边栏 */
+.sidebar {
   align-self: start;
-  padding: 18px;
-}
-
-.sidebar-card__title,
-.result-card__title {
-  margin-bottom: 14px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #6d82de 0%, #8a67cf 100%);
-  color: #ffffff;
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.sidebar-list {
-  display: grid;
-  gap: 12px;
-  padding: 0;
-  margin: 0 0 18px;
-  list-style: none;
-  color: #475467;
-  font-size: 14px;
-}
-
-.sidebar-actions {
-  display: grid;
-  gap: 10px;
-}
-
-.back-button,
-.save-button,
-.history-button,
-.export-button {
-  width: 100%;
-  border: none;
-  border-radius: 14px;
-  padding: 12px 16px;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.back-button {
-  background: rgba(109, 130, 222, 0.12);
-  color: #5d66c3;
-}
-
-.save-button {
-  background: linear-gradient(135deg, #7386e0 0%, #8f71d8 100%);
-  color: #ffffff;
-}
-
-.save-button:disabled {
-  opacity: 0.7;
-  cursor: wait;
-}
-
-.export-button:disabled {
-  opacity: 0.7;
-  cursor: wait;
-}
-
-.history-button {
-  background: rgba(79, 70, 229, 0.1);
-  color: #5b5bd6;
-}
-
-.export-button {
-  background: rgba(59, 130, 246, 0.12);
-  color: #3568d4;
-}
-
-.export-button--light {
-  background: rgba(16, 185, 129, 0.12);
-  color: #0f8c63;
-}
-
-.result-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-}
-
-.result-card {
-  padding: 18px;
-}
-
-.result-card--map,
-.result-card--weather {
-  min-height: 330px;
-}
-
-.result-card--full {
-  grid-column: 1 / -1;
-}
-
-.info-row {
-  margin-bottom: 10px;
-  color: #475467;
-  line-height: 1.7;
-}
-
-.summary-text {
-  margin-top: 14px;
-}
-
-.overview-tips {
-  margin-top: 18px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, rgba(109, 130, 222, 0.08), rgba(138, 103, 207, 0.08));
-  border: 1px solid rgba(98, 116, 164, 0.08);
-}
-
-.overview-tips__title {
-  margin-bottom: 8px;
-  color: #465467;
-  font-weight: 800;
-}
-
-.overview-tips ul {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding-left: 18px;
-  color: #5d6675;
-  line-height: 1.7;
-}
-
-.budget-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.budget-box {
+  position: sticky;
+  top: 76px;
   padding: 16px;
-  border-radius: 16px;
-  background: #f8faff;
-  border: 1px solid rgba(98, 116, 164, 0.08);
+  border-radius: 12px;
+  background: #FFFFFF;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-.budget-box__label {
-  color: #667085;
+.sidebar__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #8E8E93;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+}
+
+.sidebar__divider {
+  height: 0.5px;
+  background: rgba(0, 0, 0, 0.06);
+  margin: 8px 0;
+}
+
+/* iOS 按钮 */
+.ios-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.ios-btn:active { transform: scale(0.97); }
+.ios-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ios-btn--text {
+  background: transparent;
+  color: #007AFF;
+}
+
+.ios-btn--primary {
+  background: #007AFF;
+  color: #FFFFFF;
+}
+
+.ios-btn--sm {
+  padding: 8px 16px;
   font-size: 13px;
 }
 
-.budget-box__value {
-  margin-top: 10px;
-  color: #3b82f6;
-  font-size: 22px;
-  font-weight: 700;
+/* 主内容 */
+.result-content {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
 }
 
-.budget-total {
+/* iOS 卡片 */
+.ios-card {
+  padding: 20px;
+  border-radius: 12px;
+  background: #FFFFFF;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.ios-card--full { grid-column: 1 / -1; }
+.ios-card--map { min-height: 320px; }
+
+.ios-card__title {
+  margin: 0 0 16px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #1C1C1E;
+}
+
+.ios-card__header {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1C1C1E;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.06);
+}
+
+/* 信息行 */
+.ios-info {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.04);
+  font-size: 14px;
+  color: #3C3C43;
+}
+
+.ios-info__label { color: #8E8E93; }
+
+.ios-summary {
+  margin: 14px 0 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: #3C3C43;
+}
+
+.ios-muted { color: #8E8E93; font-size: 13px; }
+
+/* 旅行提示 */
+.ios-tips {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #F2F2F7;
+}
+
+.ios-tips__title { font-size: 13px; font-weight: 600; color: #3C3C43; margin-bottom: 8px; }
+.ios-tips ul { margin: 0; padding-left: 18px; font-size: 13px; color: #636366; line-height: 1.8; }
+
+/* 预算 */
+.ios-budget-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.ios-budget-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #F2F2F7;
+}
+
+.ios-budget-item__label { font-size: 13px; color: #8E8E93; }
+.ios-budget-item__value { font-size: 15px; font-weight: 600; color: #007AFF; }
+
+.ios-budget-total {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 14px;
-  padding: 16px 18px;
-  border-radius: 18px;
-  background: linear-gradient(135deg, #7386e0 0%, #8f71d8 100%);
-  color: #ffffff;
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #007AFF;
+  color: #FFFFFF;
+  font-size: 15px;
 }
 
-.budget-total strong {
-  font-size: 28px;
+.ios-budget-total strong { font-size: 22px; }
+
+/* 天气 */
+.ios-weather-grid { display: grid; gap: 8px; }
+
+.ios-weather-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #F2F2F7;
 }
 
-.weather-state {
-  color: #667085;
-  line-height: 1.8;
+.ios-weather-item__date { font-size: 13px; font-weight: 600; color: #3C3C43; min-width: 60px; }
+.ios-weather-item__temp { font-size: 18px; font-weight: 700; color: #007AFF; min-width: 80px; }
+.ios-weather-item__desc { font-size: 13px; color: #636366; }
+
+.ios-empty { font-size: 14px; color: #8E8E93; }
+
+/* 智能调整 */
+.ios-edit-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
 }
 
-.weather-grid {
-  display: grid;
-  gap: 12px;
-}
-
-.weather-card {
-  padding: 14px;
-  border-radius: 16px;
-  background: #f8faff;
-  border: 1px solid rgba(98, 116, 164, 0.08);
-}
-
-.weather-card__date {
-  color: #465467;
-  font-weight: 700;
-}
-
-.weather-card__temp {
-  margin: 8px 0;
-  color: #3b82f6;
-  font-size: 24px;
-  font-weight: 800;
-}
-
-.weather-card__desc {
-  color: #667085;
-  line-height: 1.7;
-}
-
-.edit-panel {
-  display: grid;
-  gap: 14px;
-}
-
-.edit-panel__controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 150px;
-  gap: 12px;
-  align-items: end;
-}
-
-.edit-field {
-  display: grid;
-  gap: 8px;
-  color: #465467;
-  font-weight: 700;
-}
-
-.edit-field select,
-.edit-textarea {
-  width: 100%;
-  border: 1px solid rgba(98, 116, 164, 0.18);
-  border-radius: 14px;
-  background: #fbfcff;
-  color: #334155;
-  font: inherit;
+.ios-select {
+  flex: 1;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #D1D1D6;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #1C1C1E;
+  background: #FFFFFF;
   outline: none;
 }
 
-.edit-field select {
-  min-height: 44px;
-  padding: 0 14px;
-}
+.ios-select:focus { border-color: #007AFF; }
 
-.edit-textarea {
+.ios-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #D1D1D6;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #1C1C1E;
+  background: #FFFFFF;
+  outline: none;
   resize: vertical;
-  min-height: 92px;
-  padding: 12px 14px;
-  line-height: 1.7;
+  font-family: inherit;
 }
 
-.edit-field select:focus,
-.edit-textarea:focus {
-  border-color: rgba(109, 130, 222, 0.65);
-  box-shadow: 0 0 0 3px rgba(109, 130, 222, 0.12);
-}
+.ios-textarea:focus { border-color: #007AFF; }
 
-.edit-submit-button {
-  min-height: 44px;
-  border: none;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #7386e0 0%, #8f71d8 100%);
-  color: #ffffff;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.edit-submit-button:disabled {
-  opacity: 0.7;
-  cursor: wait;
-}
-
-.day-budget-grid {
+/* 按天花费 */
+.ios-day-budget-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 14px;
-}
-
-.day-budget-card {
-  border-radius: 18px;
-  overflow: hidden;
-  border: 1px solid rgba(98, 116, 164, 0.08);
-  background: #fbfcff;
-}
-
-.day-budget-card__header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 16px;
-  background: rgba(109, 130, 222, 0.08);
-  color: #465467;
-  font-weight: 700;
-}
-
-.day-budget-card__body {
-  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px;
-  padding: 16px;
 }
 
-.day-budget-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: #475467;
-}
-
-.day-budget-row--total {
-  padding-top: 10px;
-  border-top: 1px solid rgba(98, 116, 164, 0.08);
-  color: #2f4fa5;
-}
-
-.point-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 14px;
-}
-
-.point-card {
-  border-radius: 18px;
+.ios-day-budget {
+  border-radius: 10px;
   overflow: hidden;
-  border: 1px solid rgba(98, 116, 164, 0.08);
-  background: #fbfcff;
+  border: 0.5px solid rgba(0, 0, 0, 0.06);
 }
 
-.point-card__header {
+.ios-day-budget__head {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  padding: 14px 16px;
-  background: rgba(109, 130, 222, 0.08);
-  color: #465467;
-  font-weight: 700;
+  padding: 10px 12px;
+  background: #F2F2F7;
+  font-size: 13px;
+  font-weight: 600;
+  color: #3C3C43;
 }
 
-.point-card__body {
+.ios-day-budget__body {
   display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.ios-row-between {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #636366;
+}
+
+.ios-row-between--bold {
+  padding-top: 8px;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.06);
+  font-weight: 600;
+  color: #1C1C1E;
+}
+
+/* 点位明细 */
+.ios-point-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 10px;
-  padding: 16px;
 }
 
-.point-card__image {
-  min-height: 150px;
-  border-radius: 14px;
-  background-position: center;
-  background-size: cover;
-  background-color: #eef3ff;
+.ios-point {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 0.5px solid rgba(0, 0, 0, 0.06);
 }
 
-.point-card__image--empty {
+.ios-point__head {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #F2F2F7;
+  font-size: 13px;
+  font-weight: 600;
+  color: #3C3C43;
+}
+
+.ios-point__img {
+  display: block;
+  width: 100%;
+  height: 140px;
+  background-color: #F2F2F7;
+  object-fit: cover;
+}
+
+.ios-point__img--empty {
   display: grid;
   place-items: center;
-  color: #7b8494;
-  font-weight: 700;
-  background:
-    linear-gradient(135deg, rgba(129, 179, 255, 0.18), rgba(137, 108, 230, 0.15)),
-    #f7f9ff;
+  font-size: 13px;
+  color: #8E8E93;
 }
 
-.point-card__line {
-  color: #475467;
-  line-height: 1.7;
-}
+.ios-point__info { padding: 6px 12px 0; font-size: 13px; color: #3C3C43; }
+.ios-point__desc { padding: 8px 12px 12px; font-size: 13px; color: #636366; line-height: 1.6; }
 
-.point-card__desc {
-  padding-top: 10px;
-  border-top: 1px solid rgba(98, 116, 164, 0.08);
-  color: #667085;
-  line-height: 1.7;
-}
+/* 每日行程 */
+.ios-day-list { display: grid; gap: 8px; }
 
-.day-list {
-  display: grid;
-  gap: 12px;
-}
-
-.day-card {
-  border-radius: 18px;
-  border: 1px solid rgba(98, 116, 164, 0.08);
-  background: #fbfcff;
+.ios-day {
+  border-radius: 10px;
+  border: 0.5px solid rgba(0, 0, 0, 0.06);
   overflow: hidden;
 }
 
-.day-card__header {
+.ios-day__head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  background: rgba(109, 130, 222, 0.08);
-  color: #465467;
-  font-weight: 700;
+  padding: 12px 14px;
+  background: #F2F2F7;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1C1C1E;
   cursor: pointer;
   list-style: none;
 }
 
-.day-card__header::-webkit-details-marker {
-  display: none;
+.ios-day__head::-webkit-details-marker { display: none; }
+
+.ios-day__head::after {
+  content: "▸";
+  font-size: 14px;
+  color: #8E8E93;
+  transition: transform 0.2s ease;
 }
 
-.day-card__header::after {
-  content: "展开";
-  flex: 0 0 auto;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(109, 130, 222, 0.12);
-  color: #5b5bd6;
-  font-size: 12px;
+.ios-day[open] .ios-day__head::after {
+  transform: rotate(90deg);
 }
 
-.day-card[open] .day-card__header::after {
-  content: "收起";
-}
-
-.day-card__meta {
-  margin-left: auto;
-  color: #667085;
-  font-size: 13px;
-}
-
-.day-card__body {
+.ios-day__body {
   display: grid;
-  gap: 10px;
-  padding: 16px;
-}
-
-.day-card__section {
-  color: #475467;
+  gap: 8px;
+  padding: 14px;
+  font-size: 14px;
+  color: #3C3C43;
   line-height: 1.7;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.06);
 }
 
-.empty-state {
-  display: grid;
-  place-items: center;
-  min-height: 360px;
-}
-
-.empty-state__card {
-  max-width: 560px;
-  padding: 36px;
-  text-align: center;
-}
-
-.empty-state__card h2 {
-  margin: 0 0 12px;
-}
-
-.empty-state__card p {
-  margin: 0 0 18px;
-  color: #667085;
-  line-height: 1.7;
-}
+/* 空状态 */
+.empty-state { min-height: 400px; }
 
 @media (max-width: 960px) {
-  .result-page {
-    grid-template-columns: 1fr;
-  }
-
-  .result-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .edit-panel__controls {
-    grid-template-columns: 1fr;
-  }
+  .result-page { grid-template-columns: 1fr; }
+  .sidebar { position: static; display: flex; gap: 16px; flex-wrap: wrap; }
+  .sidebar__section { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+  .sidebar__divider { display: none; }
+  .sidebar__label { display: none; }
+  .result-content { grid-template-columns: 1fr; }
 }
 </style>

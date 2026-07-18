@@ -62,6 +62,45 @@ def test_generate_trip_itinerary_builds_day_plans_by_date_range() -> None:
     assert itinerary.days[2].day_index == 3
 
 
+def test_generate_trip_itinerary_does_not_invent_fallback_entities(monkeypatch) -> None:
+    """模型不可用且候选不足时，只展示 RAG 中的真实名称，不生成模板实体。"""
+    contexts = [
+        "[来源: dali_guide.md | 标题: 2.1 大理古城-南门楼]\n"
+        "* **位置**：古城区大理古城一塔路42号\n"
+        "* **简介**：适合拍照留念。",
+        "[来源: dali_guide.md | 标题: 经济实惠]\n"
+        "* **【大理乐客特色小吃】招牌菜**：过桥米线。人均预算 **25元**。",
+        "[来源: dali_guide.md | 标题: 经济型]\n"
+        "* **【大理邻步客栈】**：交通便利。酒店预算：**180元/晚**。",
+    ]
+
+    monkeypatch.setattr(
+        trip_service,
+        "collect_trip_context",
+        lambda **_: (contexts, {"prompt_tokens": 0, "completion_tokens": 0}, {"prompt_tokens": 0, "completion_tokens": 0}, {"prompt_tokens": 0, "completion_tokens": 0}),
+    )
+    monkeypatch.setattr(
+        trip_service,
+        "generate_planner_draft",
+        lambda *_: (None, {"prompt_tokens": 0, "completion_tokens": 0}),
+    )
+    monkeypatch.setattr(trip_service, "ENABLE_AMAP_ENRICHMENT", False)
+
+    itinerary = generate_trip_itinerary(build_trip_request())
+    serialized = itinerary.model_dump_json()
+
+    assert itinerary.days[0].spots[0].name == "大理古城-南门楼"
+    assert itinerary.days[0].meals[0].name == "大理乐客特色小吃"
+    assert all(day.hotel is not None and day.hotel.name == "大理邻步客栈" for day in itinerary.days)
+    assert itinerary.days[1].spots == []
+    assert itinerary.days[1].meals == []
+    assert any("未从当前攻略检索到景点信息" in note for note in itinerary.days[1].notes)
+    assert any("未从当前攻略检索到餐饮信息" in note for note in itinerary.days[1].notes)
+    assert "推荐景点" not in serialized
+    assert "特色餐饮" not in serialized
+    assert "舒适型住宿" not in serialized
+
+
 def test_generate_trip_itinerary_keeps_request_preferences_in_summary() -> None:
     """测试用户偏好会被写入返回摘要中。"""
     request = build_trip_request()
@@ -98,8 +137,8 @@ def test_edit_trip_itinerary_updates_target_day_theme(monkeypatch) -> None:
 
 
 def test_edit_trip_itinerary_can_replace_first_spot_with_free_time(monkeypatch) -> None:
-    “””测试”不要安排”指令会把景点调整成自由活动。”””
-    monkeypatch.setattr(trip_service, “generate_day_edit_draft”, lambda request, target_day: (None, {“prompt_tokens”: 0, “completion_tokens”: 0}))
+    """测试“不要安排”指令会把景点调整成自由活动。"""
+    monkeypatch.setattr(trip_service, "generate_day_edit_draft", lambda request, target_day: (None, {"prompt_tokens": 0, "completion_tokens": 0}))
     original_itinerary = generate_trip_itinerary(build_trip_request())
 
     edit_request = TripEditRequest(

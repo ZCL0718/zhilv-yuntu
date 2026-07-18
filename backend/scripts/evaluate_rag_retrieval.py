@@ -19,15 +19,17 @@ from app.rag.retriever import retrieve_travel_guide_chunks
 
 DEFAULT_CASES_PATH = BACKEND_DIR / "eval" / "rag_eval_cases.json"
 
-ALL_DESTINATIONS = ["大理", "成都", "西安", "厦门", "三亚"]
-
-
 def _load_cases(path: Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as file:
         data = json.load(file)
     if not isinstance(data, list):
         raise ValueError("RAG eval cases file must contain a JSON list.")
     return data
+
+
+def _collect_case_destinations(cases: list[dict[str, Any]]) -> set[str]:
+    """从评估样例自动收集目的地，新增城市无需维护独立常量。"""
+    return {str(case["destination"]) for case in cases if case.get("destination")}
 
 
 def _contains_any(text: str, keywords: list[str]) -> bool:
@@ -38,9 +40,11 @@ def _count_keyword_hits(text: str, keywords: list[str]) -> int:
     return sum(1 for keyword in keywords if keyword in text)
 
 
-def _evaluate_case(case: dict[str, Any]) -> dict[str, Any]:
+def _evaluate_case(case: dict[str, Any], known_destinations: set[str]) -> dict[str, Any]:
     top_k = int(case.get("top_k", 5))
     destination = str(case["destination"])
+    if destination not in known_destinations:
+        raise ValueError(f"Unknown evaluation destination: {destination}")
     query, _ = build_destination_query(
         destination=destination,
         preferences=list(case.get("preferences", [])),
@@ -78,14 +82,10 @@ def _evaluate_case(case: dict[str, Any]) -> dict[str, Any]:
             reciprocal_rank = 1.0 / rank
             break
 
-    # 跨目的地污染：片段来源包含非当前目的地的城市名
-    other_destinations = [d for d in ALL_DESTINATIONS if d not in destination]
+    # 跨目的地污染：直接比较 Chunk metadata.destination，缺失也视为污染。
     pollution_count = 0
     for chunk in chunks:
-        source = str(chunk.get("source", ""))
-        title = str(chunk.get("title", ""))
-        chunk_text = f"{source} {title}"
-        if any(other in chunk_text for other in other_destinations):
+        if str(chunk.get("destination", "")) != destination:
             pollution_count += 1
 
     return {
@@ -146,7 +146,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     cases = _load_cases(args.cases)
-    results = [_evaluate_case(case) for case in cases]
+    known_destinations = _collect_case_destinations(cases)
+    results = [_evaluate_case(case, known_destinations) for case in cases]
 
     for result in results:
         _print_case_result(result)
@@ -172,6 +173,7 @@ def main() -> int:
 
     print("=== Summary ===")
     print(f"cases: {total}")
+    print(f"destinations: {'、'.join(sorted(known_destinations))}")
     print(f"top1_title_hit_rate: {top1_hits}/{total} ({top1_hits/total*100:.1f}%)")
     print(f"topk_title_hit_rate: {topk_hits}/{total} ({topk_hits/total*100:.1f}%)")
     print(f"required_keyword_coverage: {total_required_hits}/{total_required_keywords}")

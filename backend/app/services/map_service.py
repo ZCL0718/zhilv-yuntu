@@ -225,10 +225,24 @@ def estimate_route(
 
 
 def _pick_best_place(keyword: str, city: str | None = None) -> dict[str, Any] | None:
-    """优先从 POI 搜索里选取第一条结果。"""
-    results = search_places(keyword=keyword, city=city, page_size=1)
+    """优先选择名称匹配且带照片的 POI，避免首条结果没有图片。"""
+    results = search_places(keyword=keyword, city=city, page_size=5)
     if not results:
         return None
+
+    normalized_keyword = _normalize_cache_text(keyword)
+    for result in results:
+        normalized_name = _normalize_cache_text(str(result.get("name") or ""))
+        if (
+            result.get("image_url")
+            and normalized_name
+            and (
+                normalized_name in normalized_keyword
+                or normalized_keyword in normalized_name
+            )
+        ):
+            return result
+
     return results[0]
 
 

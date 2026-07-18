@@ -43,9 +43,7 @@ async function openTrip(tripId: string) {
 
 async function removeTrip(tripId: string) {
   const confirmed = window.confirm("确定要删除这条已保存行程吗？删除后无法恢复。");
-  if (!confirmed) {
-    return;
-  }
+  if (!confirmed) return;
 
   deletingTripId.value = tripId;
   try {
@@ -61,59 +59,43 @@ async function removeTrip(tripId: string) {
 }
 
 onMounted(() => {
-  if (props.active) {
-    void loadTrips();
-  }
+  if (props.active) void loadTrips();
 });
 
-watch(
-  () => props.active,
-  (active) => {
-    if (active) {
-      void loadTrips();
-    }
-  }
-);
+watch(() => props.active, (active) => {
+  if (active) void loadTrips();
+});
 </script>
 
 <template>
   <section class="history-page">
-    <div class="history-header">
+    <!-- 头部 -->
+    <div class="ios-card history-header">
       <div>
-        <h2>历史行程</h2>
-        <p>这里会展示已经保存到后端数据库里的 itinerary 摘要。</p>
+        <h2 class="history-header__title">历史行程</h2>
+        <p class="history-header__desc">已保存到数据库的行程记录</p>
       </div>
-      <button class="refresh-button" @click="loadTrips">刷新列表</button>
+      <button class="ios-btn ios-btn--primary ios-btn--sm" @click="loadTrips">刷新</button>
     </div>
 
-    <div v-if="loading" class="history-state">正在加载历史列表...</div>
-    <div v-else-if="items.length === 0" class="history-state">还没有已保存的行程。</div>
+    <!-- 状态 -->
+    <div v-if="loading" class="ios-card ios-empty">正在加载...</div>
+    <div v-else-if="items.length === 0" class="ios-card ios-empty">还没有已保存的行程</div>
 
+    <!-- 列表 -->
     <div v-else class="history-grid">
-      <article
-        v-for="item in items"
-        :key="item.trip_id"
-        class="history-card"
-      >
-        <div class="history-card__destination">{{ item.destination }}</div>
-        <div class="history-card__trip-id">{{ item.trip_id }}</div>
+      <div v-for="item in items" :key="item.trip_id" class="ios-card history-card">
+        <div class="history-card__dest">{{ item.destination }}</div>
+        <div class="history-card__id">{{ item.trip_id }}</div>
         <p class="history-card__summary">{{ item.summary }}</p>
-        <div class="history-card__time">
-          更新时间：{{ item.updated_at || "未记录" }}
-        </div>
+        <div class="history-card__time">{{ item.updated_at || "未记录" }}</div>
         <div class="history-card__actions">
-          <button class="history-card__button" @click="openTrip(item.trip_id)">
-            查看详情
-          </button>
-          <button
-            class="history-card__button history-card__button--danger"
-            :disabled="deletingTripId === item.trip_id"
-            @click="removeTrip(item.trip_id)"
-          >
-            {{ deletingTripId === item.trip_id ? "删除中..." : "删除行程" }}
+          <button class="ios-btn ios-btn--primary ios-btn--sm" @click="openTrip(item.trip_id)">查看详情</button>
+          <button class="ios-btn ios-btn--danger ios-btn--sm" :disabled="deletingTripId === item.trip_id" @click="removeTrip(item.trip_id)">
+            {{ deletingTripId === item.trip_id ? "删除中..." : "删除" }}
           </button>
         </div>
-      </article>
+      </div>
     </div>
   </section>
 </template>
@@ -121,102 +103,112 @@ watch(
 <style scoped>
 .history-page {
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
+/* 头部 */
 .history-header {
   display: flex;
   justify-content: space-between;
-  align-items: end;
-  gap: 16px;
-  padding: 24px;
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 22px 55px rgba(98, 116, 164, 0.12);
+  align-items: center;
 }
 
-.history-header h2 {
-  margin: 0 0 8px;
-  font-size: 28px;
-  color: #31456a;
-}
-
-.history-header p {
-  margin: 0;
-  color: #667085;
-}
-
-.refresh-button,
-.history-card__button {
-  border: none;
-  border-radius: 14px;
-  padding: 12px 16px;
-  background: linear-gradient(135deg, #7386e0 0%, #8f71d8 100%);
-  color: #ffffff;
+.history-header__title {
+  margin: 0 0 4px;
+  font-size: 22px;
   font-weight: 700;
-  cursor: pointer;
+  color: #1C1C1E;
 }
 
-.history-card__actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+.history-header__desc {
+  margin: 0;
+  font-size: 14px;
+  color: #8E8E93;
 }
 
-.history-card__button--danger {
-  background: rgba(239, 68, 68, 0.12);
-  color: #c2410c;
+/* 卡片 */
+.ios-card {
+  padding: 20px;
+  border-radius: 12px;
+  background: #FFFFFF;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-.history-card__button:disabled {
-  opacity: 0.65;
-  cursor: wait;
-}
-
-.history-state {
-  padding: 28px;
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 22px 55px rgba(98, 116, 164, 0.12);
-  color: #667085;
+.ios-empty {
   text-align: center;
+  color: #8E8E93;
+  font-size: 14px;
+  padding: 40px 20px;
 }
 
+/* 按钮 */
+.ios-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ios-btn:active { transform: scale(0.97); }
+.ios-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ios-btn--primary { background: #007AFF; color: #FFFFFF; }
+.ios-btn--danger { background: #FF3B30; color: #FFFFFF; }
+.ios-btn--sm { padding: 6px 14px; font-size: 13px; }
+
+/* 列表 */
 .history-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 18px;
+  gap: 12px;
 }
 
 .history-card {
-  display: grid;
-  gap: 12px;
-  padding: 22px;
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 22px 55px rgba(98, 116, 164, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.history-card__destination {
-  font-size: 28px;
-  font-weight: 800;
-  color: #42558d;
+.history-card__dest {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1C1C1E;
 }
 
-.history-card__trip-id {
-  color: #8a94a6;
-  font-size: 13px;
+.history-card__id {
+  font-size: 12px;
+  color: #8E8E93;
   word-break: break-all;
 }
 
 .history-card__summary {
   margin: 0;
-  color: #475467;
-  line-height: 1.7;
+  font-size: 14px;
+  color: #3C3C43;
+  line-height: 1.6;
 }
 
 .history-card__time {
-  color: #667085;
-  font-size: 13px;
+  font-size: 12px;
+  color: #8E8E93;
+}
+
+.history-card__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.06);
+}
+
+@media (max-width: 768px) {
+  .history-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
 }
 </style>
