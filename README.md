@@ -8,6 +8,11 @@
 
 ## 📝 最近更新
 
+- `2026-07-18`
+  - RAG：知识库扩展为北京、大理、成都、西安、厦门、三亚 6 个目的地；Chunk 写入 `destination` metadata，Chroma 向量检索、关键词 fallback、Rerank 与缓存均按目的地隔离，跨城市污染评估自动纳入北京。
+  - 数据质量：检索扩展词迁移到 `backend/data/retrieval_rules.json`；RAG 评估集更新为 18 条并与当前攻略内容对齐；新增离线一致性校验，能够发现失效规则词、fallback 候选和评估断言词。
+  - 失败降级：模型不可用或候选不足时，行程只展示从当前 RAG 上下文提取的景点、餐饮和住宿名称；没有真实候选就明确留空，不再生成“推荐景点 N”类模板实体。
+  - 开发体验：新增 `start.ps1`，构建并启动后会打印前端、后端和 API 文档地址；新增模型连通性检测脚本，Chat 与 Embedding 可分别诊断。
 - `2026-06-11`
   - 部署：新增 Docker Compose 容器化部署方案，后端（FastAPI）、前端（Nginx）、Redis 三容器编排，`docker compose up` 一键启动。
   - 前端：Nginx 反向代理统一前后端入口，两阶段构建优化镜像体积。
@@ -28,6 +33,7 @@
 
 更多更新见：[CHANGELOG.md](./CHANGELOG.md)
 
+> **数据边界**：当前本地 Markdown 攻略用于 RAG 参考，并不等同于已逐条核验的实时 POI、门票、餐饮或住宿数据。涉及价格、营业状态和可预订性时，应以外部服务或人工核验结果为准。
 
 ---
 
@@ -53,10 +59,9 @@
 
 ## ✨ 项目亮点
 
-- 🧠 **LLM 行程生成**：基于 LangChain + DashScope 调用 `qwen-max` 生成结构化旅行计划
-- 📚 **RAG 攻略增强**
-  - 本地 Markdown 攻略 + Chroma 向量检索，为生成结果补充目的地上下文
-  - 在线阶段通过 LLM-based Query Rewrite + Cross-encoder Rerank（qwen3-rerank）+ 噪声预过滤持续优化检索质量，Top1 命中率 93.3%，MRR 0.967
+- 🧠 **LLM 行程生成**：基于 LangChain 与 OpenAI-compatible 接口生成结构化旅行计划，Chat、Embedding、Rerank 模型可分别配置
+- 📚 **本地攻略检索**：覆盖北京、大理、成都、西安、厦门、三亚 6 个目的地，为行程生成补充对应城市的攻略信息，并避免跨城市内容混入
+- 🛡️ **不伪造的失败降级**：RAG 候选不足时返回空安排和原因说明，不再用模板化景点、餐饮或住宿名称填充结果
 - 🗺️ **高德地图接入**：补充景点地址、经纬度、POI ID、路线距离、耗时和景点图片，并支持虚线箭头路线可视化与 🚩 打卡标记
 - 🌦️ **天气感知提示**：前端展示天气预报，并根据雨天/阴天自动修正旅行提示
 - ⚡ **Redis 缓存层**：覆盖天气、地图、RAG 检索与 Rerank 结果缓存，减少重复外部调用开销
@@ -74,7 +79,7 @@
 ### 技术栈
 
 - 后端：FastAPI + Pydantic + SQLAlchemy
-- LLM：LangChain + DashScope (`qwen-max`)
+- LLM：LangChain
 - 向量库：ChromaDB
 - 缓存：Redis
 - 外部服务：HTTPX + 高德地图 Web 服务 + 高德 JavaScript API
@@ -328,63 +333,63 @@ flowchart TD
 TripPlannerDemo/
 ├── backend/
 │   ├── app/
-│   │   ├── config.py          # 环境变量、数据库 Base、全局配置
+│   │   ├── config.py                  # 环境变量、数据库与全局配置
 │   │   ├── agents/
-│   │   │   ├── trip_planner_agent.py    # LLM 行程生成与单日编辑逻辑
+│   │   │   ├── trip_planner_agent.py  # LLM 行程生成与单日编辑
 │   │   │   └── tools/
-│   │   │       └── rag_tool.py          # Query Rewrite：LLM-based 改写 + 规则级 fallback
+│   │   │       └── rag_tool.py         # 查询改写与检索规则加载
 │   │   ├── api/
-│   │   │   ├── main.py                  # FastAPI 应用入口
+│   │   │   ├── main.py                 # FastAPI 应用入口
 │   │   │   └── routes/
-│   │   │       ├── trip.py              # 生成、编辑、保存、查询、删除接口
-│   │   │       ├── export.py            # Markdown / PDF 导出接口
-│   │   │       └── weather.py           # 天气预报接口
+│   │   │       ├── trip.py             # 行程生成、编辑与历史接口
+│   │   │       ├── export.py           # Markdown / PDF 导出接口
+│   │   │       └── weather.py          # 天气预报接口
 │   │   ├── models/
-│   │   │   ├── schemas.py               # Pydantic 请求体 / 响应体 / itinerary 模型
-│   │   │   └── db_models.py             # SQLAlchemy 数据库表定义
+│   │   │   ├── schemas.py              # Pydantic 请求与响应模型
+│   │   │   └── db_models.py            # SQLAlchemy 数据表定义
 │   │   ├── rag/
-│   │   │   ├── vector_db.py             # Markdown 切片、Chroma 入库与检索
-│   │   │   └── retriever.py             # 检索封装、RAG 缓存、Cross-encoder Rerank + 规则级 fallback
+│   │   │   ├── guide_catalog.py        # 攻略文件与目的地映射
+│   │   │   ├── vector_db.py            # 文档切片、Chroma 入库与检索
+│   │   │   ├── retriever.py            # 检索、重排序与缓存
+│   │   │   └── knowledge_validation.py # 攻略、规则与评估配置一致性校验
 │   │   └── services/
-│   │       ├── trip_service.py          # 行程主编排逻辑、预算计算、地图 enrich
-│   │       ├── cache_service.py         # Redis 缓存封装与降级逻辑
-│   │       ├── map_service.py           # 高德地图 POI、地理编码、路线、图片补充
-│   │       ├── weather_service.py       # 高德天气服务封装
-│   │       ├── storage_service.py       # SQLite 保存、查询、列表、删除
-│   │       └── export_service.py        # Markdown / PDF 渲染与导出
-│   ├── data/                  # 本地攻略文档
-│   ├── eval/                  # RAG 检索评估样例集
-│   ├── scripts/               # ingest、地图验证、RAG 调试与评估脚本
-│   ├── tests/                 # pytest 测试
-│   ├── Dockerfile             # 后端容器打包配置
-│   ├── .dockerignore          # Docker 构建排除规则
-│   ├── .env.example           # 后端环境变量模板
+│   │       ├── trip_service.py         # 行程主编排、预算与地图补全
+│   │       ├── fallback_candidates.py  # 从攻略上下文提取真实候选
+│   │       ├── map_service.py          # 高德 POI、路线与图片
+│   │       ├── weather_service.py      # 天气服务
+│   │       ├── storage_service.py      # SQLite 行程存储
+│   │       ├── cache_service.py        # Redis 缓存与降级
+│   │       └── export_service.py       # Markdown / PDF 导出
+│   ├── data/
+│   │   ├── *_guide.md                  # 6 个目的地的本地攻略
+│   │   └── retrieval_rules.json        # 查询扩展词配置
+│   ├── eval/rag_eval_cases.json        # RAG 评估样例集
+│   ├── scripts/                         # 数据入库、调试、评估与校验脚本
+│   ├── tests/                           # pytest 测试
+│   ├── Dockerfile                       # 后端镜像配置
+│   ├── .env.example                     # 后端环境变量模板
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── services/
-│   │   │   └── api.ts                   # Axios 封装与前端 API 调用
-│   │   ├── types/
-│   │   │   └── index.ts                 # TypeScript 数据类型定义
 │   │   ├── views/
-│   │   │   ├── Home.vue                 # 规划页
-│   │   │   ├── Result.vue               # 结果展示页
-│   │   │   └── History.vue              # 历史列表页
+│   │   │   ├── Home.vue                 # 规划页面
+│   │   │   ├── Result.vue               # 行程结果页面
+│   │   │   └── History.vue              # 历史行程页面
 │   │   ├── components/
 │   │   │   └── AmapTripMap.vue          # 地图展示组件
-│   │   ├── App.vue                      # 页面切换入口
-│   │   └── main.ts                      # 前端入口
-│   ├── Dockerfile             # 前端两阶段构建（Node 编译 → Nginx 托管）
-│   ├── nginx.conf             # Nginx 配置（静态文件 + API 反向代理）
-│   ├── .dockerignore          # Docker 构建排除规则
-│   ├── .env.example           # 前端环境变量模板
+│   │   ├── services/api.ts              # 后端接口封装
+│   │   ├── types/                       # TypeScript 类型定义
+│   │   ├── App.vue
+│   │   └── main.ts
+│   ├── Dockerfile                       # 前端镜像配置
+│   ├── nginx.conf                       # Nginx 反向代理配置
 │   └── package.json
-├── docker-compose.yaml        # 服务编排（后端 + 前端 + Redis）
-├── assets/
-│   └── showcase/              # README 展示截图
-├── CHANGELOG.md               # 项目功能与架构更新日志
-├── .gitignore
-└── README.md
+├── docs/                                # 架构、数据与优化文档
+├── assets/showcase/                     # README 展示截图
+├── docker-compose.yaml                  # 前端、后端、Redis 编排
+├── start.ps1                            # Docker Compose 启动脚本
+├── README.md
+└── CHANGELOG.md
 ```
 
 > `docs/` 是本地开发与面试准备文档目录，默认已被 `.gitignore` 忽略，不随 GitHub 上传。
@@ -431,62 +436,87 @@ TripPlannerDemo/
 
 ---
 
-## 🚀 快速启动
+## 🚀 启动项目
 
-以下命令默认从项目根目录 `TripPlannerDemo/` 开始执行。
+项目提供两种启动方式：本地运行适合开发和调试；Docker Compose 适合快速启动完整环境。以下命令默认从项目根目录 `TripPlannerDemo/` 开始执行。
 
-### 1. 启动 Redis（可选）
+### 方式一：本地运行（不使用 Docker）
 
-```bash
-docker run -d --name tripplanner-redis -p 6379:6379 redis:7
-```
+需要本机已安装 Python 3.11、Node.js 与 npm。后端和前端请分别在两个终端中启动。
 
-如果已创建过容器：
+#### 1. 配置并启动后端
 
-```bash
-docker start tripplanner-redis
-```
-
-在 `backend/.env` 中设置 `REDIS_ENABLED=true` 开启缓存（天气、地图、RAG 检索与 Rerank 结果）。
-
-### 2. 启动后端
-
-```bash
-cd TripPlannerDemo
+```powershell
 cd backend
+Copy-Item .env.example .env
+# 编辑 .env，填写 LLM、Embedding 和高德地图等配置
 pip install -r requirements.txt
-# 手动复制 .env.example 为 .env，并填写你的配置
 uvicorn app.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-启动后访问：
+后端启动后可访问：
 
 ```text
-http://127.0.0.1:8000/
-http://127.0.0.1:8000/docs
+API:      http://127.0.0.1:8000
+API 文档: http://127.0.0.1:8000/docs
 ```
 
-### 3. 启动前端
+首次使用 RAG 时，另开终端执行以下命令将本地攻略写入 Chroma：
 
-```bash
-cd TripPlannerDemo
+```powershell
+cd backend
+python scripts/ingest_data.py
+```
+
+#### 2. 配置并启动前端
+
+```powershell
 cd frontend
+Copy-Item .env.example .env
+# 本机运行时，将 VITE_API_BASE_URL 配置为 http://127.0.0.1:8000
 npm install
-# 手动复制 .env.example 为 .env，并填写你的配置
 npm run dev
 ```
 
+前端地址：`http://127.0.0.1:5173`。
+
+#### 3. 可选：开启本地 Redis 缓存
+
+默认 `REDIS_ENABLED=false`，即使未安装 Redis 也可以运行项目。若本机已安装 Redis，可运行 `redis-server`，再将 `backend/.env` 中的 `REDIS_ENABLED` 改为 `true`，以启用天气、地图和检索缓存。
+
+### 方式二：Docker Compose 运行
+
+需要先安装并启动 [Docker Desktop](https://www.docker.com/products/docker-desktop/)。推荐在 Windows PowerShell 中执行：
+
+```powershell
+.\start.ps1
+```
+
+脚本会构建并在后台启动前端、后端和 Redis。也可以使用 Docker Compose：
+
+```powershell
+docker compose up --build -d
+```
+
 启动后访问：
 
 ```text
-http://127.0.0.1:5173
+前端:     http://localhost
+后端:     http://localhost:8000
+API 文档: http://localhost:8000/docs
+```
+
+停止容器：
+
+```powershell
+docker compose down
 ```
 
 ---
 
-## 🐳 Docker 部署
+## 🐳 Docker 架构与设计
 
-项目支持 Docker Compose 一键部署，将后端、前端和 Redis 打包为三个容器，统一编排管理。
+Docker Compose 将后端、前端和 Redis 打包为三个容器，统一编排管理。
 
 ### 架构
 
@@ -523,33 +553,13 @@ http://127.0.0.1:5173
 | `backend/.dockerignore` | 排除 `__pycache__`、`.env`、`db/` 等不需要打包的文件 |
 | `frontend/.dockerignore` | 排除 `node_modules`、`dist` 等不需要打包的文件 |
 
-### 启动
-
-> **前提**：需要先安装并启动 [Docker Desktop](https://www.docker.com/products/docker-desktop/)，等待左下角显示"Engine running"后再执行以下命令。
-
-```bash
-# 首次构建（需要几分钟下载镜像和安装依赖）
-docker compose up --build
-
-# 后台运行
-docker compose up --build -d
-```
-
-启动后访问 `http://localhost`。
-
-### 停止
-
-```bash
-docker compose down
-```
-
 ### 关键设计
 
 - **两阶段构建**：前端用 Node 编译出静态文件后，只把产物复制到 Nginx 镜像，最终镜像不含 Node.js，体积从几百 MB 缩小到几十 MB。
 - **Nginx 反向代理**：前端静态文件由 Nginx 直接返回，API 请求通过 `proxy_pass` 转发给后端容器，统一入口，避免跨域问题。
 - **层缓存优化**：后端 Dockerfile 先复制 `requirements.txt` 安装依赖，再复制代码。改代码时不会重新安装依赖。
 - **环境变量隔离**：`.env` 文件通过 `env_file` 注入容器，不打包进镜像，避免泄露 API Key。
-- **数据持久化**：Redis 数据、SQLite 数据库和知识库 markdown 文件通过 Docker volumes 挂载，容器重建后数据不丢失。
+- **数据持久化**：Redis 数据和 SQLite 数据库通过 Docker volumes 挂载；当前知识库 Markdown 随后端镜像构建，更新攻略后需重新构建镜像。
 
 ---
 
@@ -560,16 +570,16 @@ docker compose down
 ```env
 # LLM
 LLM_PROVIDER=openai_compatible          # 固定值，使用 OpenAI 兼容接口
-LLM_API_KEY=your_dashscope_api_key      # DashScope API Key
-LLM_MODEL=qwen-max                      # 生成模型
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_API_KEY=your_api_key                # OpenAI-compatible 服务的 API Key
+LLM_MODEL=your_chat_model               # 生成模型，例如 deepseek-v4-flash
+LLM_BASE_URL=https://your-provider/v1   # 服务的 OpenAI-compatible 地址
 LLM_TIMEOUT_SECONDS=60                  # 单次 LLM 调用超时
 LLM_MAX_RETRIES=1                       # 失败重试次数
 
 # RAG / 向量库
 CHROMA_DB_DIR=db/chroma_db              # ChromaDB 持久化目录
 CHROMA_COLLECTION_NAME=travel_guides    # 集合名称
-EMBEDDING_MODEL=text-embedding-v4       # DashScope 嵌入模型
+EMBEDDING_MODEL=your_embedding_model    # 嵌入模型，例如 qwen3.7-text-embedding
 EMBEDDING_BATCH_SIZE=10                 # 单批嵌入条数
 RERANK_MODEL=qwen3-rerank              # DashScope Rerank 模型
 
@@ -830,12 +840,14 @@ cd frontend
 ## ✅ 当前完成度
 
 - ✅ **后端能力**：行程生成、智能编辑、保存查询、历史列表、删除、天气查询、Markdown 导出与 PDF 导出接口
-- ✅ **AI 与数据能力**：LangChain 行程生成链路、5 个目的地攻略 RAG 检索、Chroma 入库检索、高德地图地址/坐标/路线/图片补充
-- ✅ **RAG 在线优化**：LLM-based Query Rewrite + Cross-encoder Rerank（qwen3-rerank）+ 噪声预过滤 + Rerank 缓存、检索调试脚本与 15 条评估样例集、量化评估指标体系（Top1/TopK Hit Rate、MRR、Noise Rate、Latency、Cross-destination Pollution）
+- ✅ **AI 与数据能力**：LangChain 行程生成链路、北京/大理/成都/西安/厦门/三亚 6 城攻略 RAG 检索、Chroma 入库检索、高德地图地址/坐标/路线/图片补充
+- ✅ **RAG 在线优化**：LLM-based Query Rewrite + Cross-encoder Rerank（qwen3-rerank）+ 噪声预过滤 + Rerank 缓存、目的地 metadata 过滤、检索调试脚本与 18 条评估样例集、量化评估指标体系（Top1/TopK Hit Rate、MRR、Noise Rate、Latency、Cross-destination Pollution）
 - ✅ **Token 观测能力**：`/trip/generate` 返回本次 Query Rewrite、Query Embedding、Rerank、Planner 的分项 token 消耗，后端终端同步打印 prompt/completion/total，`/trip/stats` 汇总已保存行程的 token 统计
 - ✅ **前端能力**：规划页、结果页、历史列表页，以及地图/天气/预算展示、导出与历史管理主流程
 - ✅ **缓存与持久化**：SQLite 持久化存储 + Redis 缓存层（覆盖天气、地图、RAG 检索与 Rerank 结果）
-- ✅ **验证情况**：核心链路稳定跑通，Redis 缓存 key 可在本地容器中验证写入
+- ✅ **数据一致性与失败降级**：规则、fallback、评估断言与目的地 metadata 可离线校验；RAG 候选不足时不再生成模板化景点、餐饮或住宿名称
+- ⚠️ **数据边界**：当前 Markdown 攻略仅作参考知识；价格、营业状态和可预订性尚未逐条接入可追溯的实时或人工核验来源
+- ⚠️ **外部模型依赖**：本地离线测试已通过；实际 Chat、Embedding、Rerank 调用仍取决于模型账户状态、模型开通情况和 `.env` 配置
 
 ---
 
@@ -846,7 +858,7 @@ cd frontend
 - ✅ **RAG 检索增强**
   - ✅ 规则级 Query Rewrite → LLM-based Query Rewrite（qwen-max），Top1 80%→86.7%，MRR 0.889→0.922。
   - ✅ 规则级 Rerank → Cross-encoder Rerank（qwen3-rerank）+ 噪声预过滤 + Rerank 缓存，Top1 86.7%→93.3%，MRR 0.922→0.967。
-  - ✅ 知识库扩充至 5 个目的地，评估样例集 15 条，量化评估指标体系完整。
+  - ✅ 知识库已覆盖 6 个目的地，评估样例集 18 条；规则、fallback、评估断言与目的地 metadata 已有离线一致性校验。模型账户恢复后需重新执行真实 RAG 评估，建立新的在线质量基线。
 - 🚧 **Token 成本分析看板**
   已完成后端 token 统计与 `/trip/stats` 汇总接口，后续可在前端增加成本分析面板，对比不同 RAG 策略下的 token 消耗、延迟和生成质量。
 - 🚧 **检索结果压缩与去冗**

@@ -2,6 +2,30 @@
 
 > 这里只记录项目功能、架构和工程能力相关的更新，不记录简历、面试文档等个人整理内容。
 
+## 2026-07-18
+
+### RAG 数据一致性与目的地隔离
+
+- 知识库扩展为北京、大理、成都、西安、厦门、三亚 6 个目的地，并在 `guide_catalog.py` 中集中维护攻略文件与目的地映射。
+- 为每个攻略 Chunk 增加 `destination` metadata；Chroma 向量检索、关键词 fallback、Rerank、RAG 缓存和跨目的地污染评估均按该字段传递或过滤。
+- `evaluate_rag_retrieval.py` 不再维护静态目的地列表，改为从评估 case 自动收集目的地，避免遗漏北京等新增城市。
+- 检索扩展规则迁移到 `backend/data/retrieval_rules.json`，清理已不存在于当前攻略中的旧 POI 扩展词；规则按全局和目的地配置加载。
+- RAG 评估集更新为 18 条，并新增静态校验，保证每个评估必需词都能命中对应城市的当前攻略。
+
+### 行程回退与知识库校验
+
+- `trip_service.py` 移除模板化景点、餐饮、住宿 fallback。模型不可用或候选不足时，只使用本次 RAG 上下文中的真实名称；没有候选则保持为空并返回明确说明。
+- 新增 `fallback_candidates.py`，将运行时 fallback 提取规则集中复用：景点需包含位置字段，餐饮需包含“招牌菜”，住宿需包含“酒店预算”。
+- 新增 `validate_knowledge_base.py` 与对应测试，离线校验攻略目录映射、规则扩展词、每城景点/餐饮/住宿 fallback 候选、评估正向断言和 Chunk destination metadata。
+- 修正无数据支撑的“轻松/休闲”全局检索扩展词；旅行节奏仍通过 `pace` 参数参与查询，不再伪装为攻略事实词。
+
+### 开发与验证
+
+- 新增 `start.ps1`：构建并启动 Docker Compose 后打印前端、后端和 API 文档地址。
+- 新增 `test_model_connection.py`，可独立检测 Chat 与 Embedding 模型连通性。
+- 已完成定向验收：fallback 回归 `1 passed`、RAG 规则 `3 passed`、评估断言 `2 passed`、目的地 metadata `5 passed`、知识库一致性 `2 passed`；知识库校验脚本输出“知识库一致性校验通过”。
+- 当前本地 Markdown 攻略仍属于参考知识，不应被视为实时、逐条核验的商户、价格或营业状态数据。
+
 ## 2026-06-11
 
 ### Docker 容器化部署
