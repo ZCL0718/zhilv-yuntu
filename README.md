@@ -8,6 +8,14 @@
 
 ## 📝 最近更新
 
+<details>
+<summary><strong>查看版本更新记录（最新：2026-07-26）</strong></summary>
+
+- `2026-07-26`
+  - 动态城市：新增 A/B/C 覆盖分级。6 个已沉淀城市继续走本地 RAG；其他可识别城市在候选充足时，通过高德景点、餐饮和住宿 POI 候选直接生成动态方案。用户已手工验证多个城市可以生成。
+  - 真实性约束：动态 Planner 只输出候选 POI ID，服务层校验后回填真实名称、地址、坐标和图片；模型不可用或返回越界 ID 时，也只从本次真实候选池降级。
+  - 输入边界：当前支持单城市规划。青海等普通省级目的地会提示改用具体城市；上海、北京、天津和重庆等直辖市仍按城市处理。
+  - 边界加固：区县级目的地改用行政区 `adcode` 精确过滤候选；明确取消景点时保留空景点列表，避免“自由活动”被地图重新绑定；地图故障会返回脱敏的失败阶段与原因。该组改动待本地回归验收。
 - `2026-07-18`
   - RAG：知识库扩展为北京、大理、成都、西安、厦门、三亚 6 个目的地；Chunk 写入 `destination` metadata，Chroma 向量检索、关键词 fallback、Rerank 与缓存均按目的地隔离，跨城市污染评估自动纳入北京。
   - 数据质量：检索扩展词迁移到 `backend/data/retrieval_rules.json`；RAG 评估集更新为 18 条并与当前攻略内容对齐；新增离线一致性校验，能够发现失效规则词、fallback 候选和评估断言词。
@@ -31,9 +39,11 @@
 - `2026-04-25`：完成第一轮 RAG 在线阶段优化，已接入轻量化 Query Rewrite、轻量 Rerank 与检索调试脚本。
 - `2026-04-15`：新增 Redis 缓存层，已覆盖天气查询、地图查询与 RAG 检索结果缓存。
 
+</details>
+
 更多更新见：[CHANGELOG.md](./CHANGELOG.md)
 
-> **数据边界**：当前本地 Markdown 攻略用于 RAG 参考，并不等同于已逐条核验的实时 POI、门票、餐饮或住宿数据。涉及价格、营业状态和可预订性时，应以外部服务或人工核验结果为准。
+> **数据边界**：6 个本地 Markdown 攻略用于 RAG 参考；动态城市的地点实体来自当次高德 POI 候选。两条路径都不代表门票、酒店价格、营业状态或可预订性已经实时核验，相关金额目前属于规划估算。
 
 ---
 
@@ -61,7 +71,7 @@
 
 - 🧠 **LLM 行程生成**：基于 LangChain 与 OpenAI-compatible 接口生成结构化旅行计划，Chat、Embedding、Rerank 模型可分别配置
 - 📚 **本地攻略检索**：覆盖北京、大理、成都、西安、厦门、三亚 6 个目的地，为行程生成补充对应城市的攻略信息，并避免跨城市内容混入
-- 🛡️ **不伪造的失败降级**：RAG 候选不足时返回空安排和原因说明，不再用模板化景点、餐饮或住宿名称填充结果
+- 🌐 **动态城市规划**：未沉淀城市先经过行政区解析，再采集景点、餐饮和住宿 POI；候选达到阈值后生成完整方案，用户已手工验证多个城市可用
 - 🗺️ **高德地图接入**：补充景点地址、经纬度、POI ID、路线距离、耗时和景点图片，并支持虚线箭头路线可视化与 🚩 打卡标记
 - 🌦️ **天气感知提示**：前端展示天气预报，并根据雨天/阴天自动修正旅行提示
 - ⚡ **Redis 缓存层**：覆盖天气、地图、RAG 检索与 Rerank 结果缓存，减少重复外部调用开销
@@ -92,8 +102,8 @@
 | :--- | :--- | :--- |
 | 前端 | `frontend/src/views/*.vue` | 规划页、结果页、历史页展示与交互 |
 | 接口层 | `backend/app/api/routes/` | trip、export、weather 路由 |
-| 服务层 | `backend/app/services/` | 行程编排、地图 enrich、天气、缓存、导出、存储 |
-| Agent 层 | `backend/app/agents/` | LLM 行程生成 + LLM-based Query Rewrite |
+| 服务层 | `backend/app/services/` | 城市解析、动态候选、行程编排、地图 enrich、天气、缓存、导出、存储 |
+| Agent 层 | `backend/app/agents/` | 本地 RAG Planner、动态 POI ID Planner、LLM-based Query Rewrite |
 | RAG 层 | `backend/app/rag/` | 向量入库、检索、Cross-encoder Rerank |
 | 数据层 | `backend/data/` | 本地 Markdown 攻略文档 |
 
@@ -121,6 +131,8 @@ flowchart TD
         end
 
         subgraph Services["Services"]
+            CityResolver["city_resolver_service.py"]
+            CandidateSvc["place_candidate_service.py"]
             TripSvc["trip_service.py"]
             MapSvc["map_service.py"]
             WeatherSvc["weather_service.py"]
@@ -154,7 +166,12 @@ flowchart TD
     Main --> Export
     Main --> Weather
 
-    Trip --> TripSvc
+    Trip --> CityResolver
+    CityResolver -->|A: curated| TripSvc
+    CityResolver -->|B: dynamic| CandidateSvc
+    CityResolver --> MapSvc
+    CandidateSvc --> MapSvc
+    CandidateSvc --> TripSvc
     Trip --> Schemas
     Weather --> WeatherSvc
     Export --> ExportSvc
@@ -197,14 +214,14 @@ flowchart TD
     class Client,Vue,Api frontend;
     class Main backend;
     class Trip,Export,Weather routes;
-    class TripSvc,MapSvc,WeatherSvc,ExportSvc,StorageSvc,CacheSvc services;
+    class CityResolver,CandidateSvc,TripSvc,MapSvc,WeatherSvc,ExportSvc,StorageSvc,CacheSvc services;
     class Planner,RagTool agent;
     class Retriever,VectorDB,ChromaDB rag;
     class Schemas,DBModels data;
     class Redis,SQLite storage;
 ```
 
-数据流路径：前端收集用户输入 → 后端调用 LLM + RAG 生成结构化行程 → 地图服务补充地址、坐标、路线和图片 → 前端展示地图、天气、预算和每日行程 → 用户可保存、编辑、查看历史并导出文档。
+数据流路径：前端收集用户输入 → 后端解析目的地覆盖等级 → 已沉淀城市走本地 RAG，未沉淀城市采集高德 POI 并进行 ID 受约束规划 → 地图与天气服务补充信息 → 前端展示地图、预算和每日行程 → 用户可保存、编辑、查看历史并导出文档。
 
 ### 数据存储与缓存分工
 
@@ -354,6 +371,9 @@ TripPlannerDemo/
 │   │   │   └── knowledge_validation.py # 攻略、规则与评估配置一致性校验
 │   │   └── services/
 │   │       ├── trip_service.py         # 行程主编排、预算与地图补全
+│   │       ├── city_registry_service.py # 城市覆盖注册表与名称规范化
+│   │       ├── city_resolver_service.py # 行政区解析与 A/B/C 覆盖判断
+│   │       ├── place_candidate_service.py # 动态景点、餐饮、住宿候选池
 │   │       ├── fallback_candidates.py  # 从攻略上下文提取真实候选
 │   │       ├── map_service.py          # 高德 POI、路线与图片
 │   │       ├── weather_service.py      # 天气服务
@@ -399,11 +419,15 @@ TripPlannerDemo/
 **后端**
 
 - `backend/app/services/trip_service.py`
-  itinerary 主流程编排，包括天数拆分、预算估算、地图 enrich 以及编辑后的统一刷新。
+  A 级 RAG 行程与 B 级动态行程的主流程编排，包括 POI ID 校验、预算估算和编辑后的统一刷新。
+- `backend/app/services/city_resolver_service.py`
+  规范化目的地并结合本地注册表与高德行政区结果，区分沉淀城市、动态城市、资料不足和不支持的省级输入。
+- `backend/app/services/place_candidate_service.py`
+  按城市采集景点、餐饮和住宿 POI，过滤跨城市、无坐标和重复结果，并校验最低候选覆盖。
 - `backend/app/services/cache_service.py`
   Redis 客户端懒加载、JSON 缓存读写与 Redis 不可用时的优雅降级。
 - `backend/app/agents/trip_planner_agent.py`
-  调用大模型生成结构化旅行草稿，并处理单日编辑时的 LLM 输出。
+  调用大模型生成结构化旅行草稿；动态城市 Planner 只允许输出候选 POI ID，并处理单日编辑时的 LLM 输出。
 - `backend/app/agents/tools/rag_tool.py`
   RAG 在线阶段的 Query Rewrite，优先 LLM-based 改写（qwen-max），fallback 到规则级关键词提取。
 - `backend/app/rag/retriever.py`
@@ -840,12 +864,12 @@ cd frontend
 ## ✅ 当前完成度
 
 - ✅ **后端能力**：行程生成、智能编辑、保存查询、历史列表、删除、天气查询、Markdown 导出与 PDF 导出接口
-- ✅ **AI 与数据能力**：LangChain 行程生成链路、北京/大理/成都/西安/厦门/三亚 6 城攻略 RAG 检索、Chroma 入库检索、高德地图地址/坐标/路线/图片补充
+- ✅ **AI 与数据能力**：6 城本地攻略 RAG 路径 + 未沉淀城市动态 POI 路径；动态 Planner 通过 POI ID 白名单选择景点、餐饮和住宿，用户已手工验证多个城市可生成
 - ✅ **RAG 在线优化**：LLM-based Query Rewrite + Cross-encoder Rerank（qwen3-rerank）+ 噪声预过滤 + Rerank 缓存、目的地 metadata 过滤、检索调试脚本与 18 条评估样例集、量化评估指标体系（Top1/TopK Hit Rate、MRR、Noise Rate、Latency、Cross-destination Pollution）
 - ✅ **Token 观测能力**：`/trip/generate` 返回本次 Query Rewrite、Query Embedding、Rerank、Planner 的分项 token 消耗，后端终端同步打印 prompt/completion/total，`/trip/stats` 汇总已保存行程的 token 统计
 - ✅ **前端能力**：规划页、结果页、历史列表页，以及地图/天气/预算展示、导出与历史管理主流程
 - ✅ **缓存与持久化**：SQLite 持久化存储 + Redis 缓存层（覆盖天气、地图、RAG 检索与 Rerank 结果）
-- ✅ **数据一致性与失败降级**：规则、fallback、评估断言与目的地 metadata 可离线校验；RAG 候选不足时不再生成模板化景点、餐饮或住宿名称
+- ✅ **数据一致性与失败降级**：规则、fallback、评估断言与目的地 metadata 可离线校验；RAG 和动态候选路径均不生成模板化地点，模型返回候选池外 ID 时自动拒绝
 - ⚠️ **数据边界**：当前 Markdown 攻略仅作参考知识；价格、营业状态和可预订性尚未逐条接入可追溯的实时或人工核验来源
 - ⚠️ **外部模型依赖**：本地离线测试已通过；实际 Chat、Embedding、Rerank 调用仍取决于模型账户状态、模型开通情况和 `.env` 配置
 
@@ -871,8 +895,8 @@ cd frontend
   可接入小红书等社交平台的旅行帖子，通过多模态解析（图文提取、结构化摘要）将真实游记转化为本地知识库素材，补充官方攻略覆盖不到的体验细节和实用 tips。
 - 🚧 **LangGraph 工作流**
   当前以 LangChain 线性编排为主，后续可引入 LangGraph 把生成、检索、地图 enrich、天气补充、编辑与导出组织成状态机，支持条件分支与并行执行；进一步可引入基于 LLM 的意图识别路由，让系统先判断用户请求类型再分发到对应处理链路。
-- 🚧 **真实商户信息展示**
-  后端接入真实餐饮、酒店/民宿数据（如高德 POI 详情、大众点评等），泛化为结构化数据（名称、地址、评分、人均、图片等），前端以卡片形式展示，提升行程的实用性和可信度。
+- 🚧 **真实商户信息深化**
+  当前动态路径已接入高德餐饮和住宿 POI 的名称、地址、坐标与图片；后续补充可追溯的评分、人均、酒店价格、营业状态和更新时间，并在前端强化商户详情展示。
 - 🚧 **外部工具与 MCP 化**
   地图、天气、联网搜索、POI 检索这类外部能力后续可以逐步抽成 MCP 工具层，便于和不同 Agent 或工作流复用，而主业务编排继续保留在服务层。
 - 🚧 **GraphRAG**

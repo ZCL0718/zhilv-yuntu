@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date as DateType, datetime
-
 from pydantic import BaseModel, Field
 
 
@@ -67,6 +66,11 @@ class MealItem(BaseModel):
     meal_type: str = Field(..., description="早餐、午餐、晚餐等")
     estimated_cost: float = Field(default=0.0, ge=0, description="预估花费")
     notes: str | None = Field(default=None, description="补充说明")
+    address: str | None = Field(default=None, description="餐饮地点详细地址")
+    latitude: float | None = Field(default=None, description="餐饮地点纬度")
+    longitude: float | None = Field(default=None, description="餐饮地点经度")
+    poi_id: str | None = Field(default=None, description="地图服务返回的 POI 标识")
+    image_url: str | None = Field(default=None, description="餐饮地点图片地址")
 
 
 class HotelItem(BaseModel):
@@ -79,6 +83,8 @@ class HotelItem(BaseModel):
     address: str | None = Field(default=None, description="酒店详细地址")
     latitude: float | None = Field(default=None, description="酒店纬度")
     longitude: float | None = Field(default=None, description="酒店经度")
+    poi_id: str | None = Field(default=None, description="地图服务返回的 POI 标识")
+    image_url: str | None = Field(default=None, description="酒店图片地址")
 
 
 class TransportItem(BaseModel):

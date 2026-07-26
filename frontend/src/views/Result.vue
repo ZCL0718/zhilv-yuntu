@@ -306,7 +306,9 @@ async function handleEdit() {
               <div><span class="ios-muted">主要景点：</span>{{ day.spots[0]?.name || "未安排" }}</div>
               <div><span class="ios-muted">景点地址：</span>{{ day.spots[0]?.address || day.spots[0]?.location || "待补充" }}</div>
               <div><span class="ios-muted">餐饮建议：</span>{{ day.meals[0]?.name || "未安排" }}</div>
+              <div><span class="ios-muted">餐饮地址：</span>{{ day.meals[0]?.address || "待补充" }}</div>
               <div><span class="ios-muted">住宿安排：</span>{{ day.hotel?.name || "未安排" }}</div>
+              <div><span class="ios-muted">住宿地址：</span>{{ day.hotel?.address || day.hotel?.location || "待补充" }}</div>
               <div><span class="ios-muted">交通信息：</span>{{ day.transport[0]?.distance_km != null ? `${day.transport[0].distance_km.toFixed(2)} km / ${day.transport[0].estimated_minutes ?? 0} 分钟` : day.transport[0]?.duration || "待补充" }}</div>
               <div><span class="ios-muted">备注：</span>{{ day.notes[day.notes.length - 1] || "无" }}</div>
             </div>

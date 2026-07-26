@@ -14,6 +14,11 @@ from app.config import (
     LLM_TIMEOUT_SECONDS,
 )
 from app.models.schemas import DayPlan, TripEditRequest, TripRequest
+from app.services.place_candidate_service import (
+    CityCandidatePool,
+    PlaceCandidate,
+    PlaceCandidateCategory,
+)
 
 
 class PlannerDayDraft(BaseModel):
@@ -34,6 +39,29 @@ class PlannerDraft(BaseModel):
     summary: str = Field(..., description="整趟旅行的简短概述")
     tips: list[str] = Field(default_factory=list, description="旅行提示")
     days: list[PlannerDayDraft] = Field(default_factory=list)
+
+
+class DynamicPlannerDayDraft(BaseModel):
+    """动态城市 Planner 只通过 POI ID 选择当天实体。"""
+
+    day_index: int = Field(..., ge=1)
+    theme: str = Field(..., description="当天主题")
+    spot_poi_id: str = Field(..., description="候选池中的景点 POI ID")
+    spot_start_time: str = Field(default="10:00", pattern=r"^\d{2}:\d{2}$")
+    spot_end_time: str = Field(default="12:00", pattern=r"^\d{2}:\d{2}$")
+    spot_reason: str = Field(..., description="选择该景点的简短理由")
+    meal_poi_id: str = Field(..., description="候选池中的餐饮 POI ID")
+    meal_notes: str = Field(..., description="用餐安排说明")
+    daily_note: str = Field(..., description="当天安排说明")
+
+
+class DynamicPlannerDraft(BaseModel):
+    """未沉淀城市的受约束行程草稿。"""
+
+    summary: str = Field(..., description="整趟旅行概述")
+    tips: list[str] = Field(default_factory=list)
+    hotel_poi_id: str = Field(..., description="候选池中的住宿 POI ID")
+    days: list[DynamicPlannerDayDraft] = Field(default_factory=list)
 
 
 class DayEditDraft(BaseModel):
@@ -288,6 +316,134 @@ JSON 结构示例：
         print(
             "[trip_planner_agent] 结构化结果天数不匹配，"
             f"expected={day_count}, actual={len(result.days)}"
+        )
+        return None, token_usage
+
+    return result, token_usage
+
+
+def _dynamic_candidate_payload(candidates: list[PlaceCandidate]) -> list[dict[str, str]]:
+    """只把 Planner 做选择所需的稳定字段放入提示词。"""
+    return [
+        {
+            "poi_id": candidate.poi_id,
+            "name": candidate.name,
+            "district": candidate.district or "",
+            "address": candidate.address or "",
+            "type": candidate.type_name or "",
+        }
+        for candidate in candidates
+    ]
+
+
+def generate_dynamic_planner_draft(
+    request: TripRequest,
+    candidate_pool: CityCandidatePool,
+    day_count: int,
+) -> tuple[DynamicPlannerDraft | None, dict[str, int]]:
+    """让模型只能通过 POI ID 从动态候选池中选择行程实体。"""
+    empty_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    llm = _build_chat_llm()
+    if llm is None:
+        return None, empty_usage
+
+    candidate_payload = {
+        category.value: _dynamic_candidate_payload(
+            candidate_pool.candidates_for(category)
+        )
+        for category in PlaceCandidateCategory
+    }
+    system_prompt = (
+        "你是旅行规划助手。请根据用户需求从给定的高德 POI 候选中编排行程。"
+        "景点、餐饮和住宿只能通过候选中的 poi_id 选择，禁止输出候选池外的地点，"
+        "禁止自行创造或改写 poi_id。不得编造价格、开放时间、星级、评分或实时营业状态。"
+        "只输出一个 JSON 对象，不要输出 Markdown 或解释。"
+    )
+    human_prompt = f"""
+目的地：{request.destination}
+出发日期：{request.start_date.isoformat()}
+结束日期：{request.end_date.isoformat()}
+天数：{day_count}
+人数：{request.travelers}
+预算：{request.budget}
+偏好：{'、'.join(request.preferences) if request.preferences else '常规旅行体验'}
+节奏：{request.pace or '适中'}
+饮食偏好：{'、'.join(request.dietary_preferences) if request.dietary_preferences else '无'}
+酒店档次：{request.hotel_level or '舒适型'}
+额外要求：{request.special_notes or '无'}
+
+候选池：
+{json.dumps(candidate_payload, ensure_ascii=False, separators=(',', ':'))}
+
+要求：
+1. 返回 {day_count} 天，day_index 必须从 1 连续到 {day_count}。
+2. 每天选择一个 spot_poi_id 和一个 meal_poi_id，整趟行程选择一个 hotel_poi_id。
+3. 所有 ID 必须逐字来自对应类别候选；不要在名称字段中返回地点。
+4. 尽量避免重复景点和餐饮，并结合区域、偏好、节奏与额外要求安排。
+5. 只返回以下 JSON 结构：
+{{
+  "summary": "整体概述",
+  "tips": ["旅行提示"],
+  "hotel_poi_id": "住宿候选 ID",
+  "days": [
+    {{
+      "day_index": 1,
+      "theme": "当天主题",
+      "spot_poi_id": "景点候选 ID",
+      "spot_start_time": "10:00",
+      "spot_end_time": "12:00",
+      "spot_reason": "选择理由",
+      "meal_poi_id": "餐饮候选 ID",
+      "meal_notes": "用餐说明",
+      "daily_note": "当天说明"
+    }}
+  ]
+}}
+"""
+
+    print("[trip_planner_agent] 准备调用动态城市 Planner...")
+    try:
+        response = llm.invoke(
+            [
+                ("system", system_prompt),
+                ("human", human_prompt),
+            ]
+        )
+    except Exception as exc:
+        print(
+            "[trip_planner_agent] 动态城市 Planner 调用失败: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None, empty_usage
+
+    token_usage = _extract_token_usage(response)
+    raw_text = getattr(response, "content", "")
+    if isinstance(raw_text, list):
+        raw_text = "".join(
+            item.get("text", "") if isinstance(item, dict) else str(item)
+            for item in raw_text
+        )
+
+    json_text = _extract_json_object(str(raw_text))
+    if json_text is None:
+        print("[trip_planner_agent] 未能从动态城市 Planner 返回中提取 JSON。")
+        return None, token_usage
+
+    try:
+        result = DynamicPlannerDraft.model_validate(json.loads(json_text))
+    except Exception as exc:
+        print(
+            "[trip_planner_agent] 动态城市 Planner JSON 解析失败: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None, token_usage
+
+    expected_indexes = list(range(1, day_count + 1))
+    actual_indexes = sorted(day.day_index for day in result.days)
+    if len(result.days) != day_count or actual_indexes != expected_indexes:
+        print(
+            "[trip_planner_agent] 动态城市 Planner 天数或 day_index 不匹配: "
+            f"expected={expected_indexes}, actual={actual_indexes}"
         )
         return None, token_usage
 

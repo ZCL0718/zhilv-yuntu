@@ -136,8 +136,8 @@ def test_edit_trip_itinerary_updates_target_day_theme(monkeypatch) -> None:
     assert "已根据用户要求把节奏调整得更轻松。" in updated_itinerary.days[1].notes
 
 
-def test_edit_trip_itinerary_can_replace_first_spot_with_free_time(monkeypatch) -> None:
-    """测试“不要安排”指令会把景点调整成自由活动。"""
+def test_edit_trip_itinerary_can_remove_spots_for_free_time(monkeypatch) -> None:
+    """明确取消景点时应留空，不创建可被地图误识别的占位地点。"""
     monkeypatch.setattr(trip_service, "generate_day_edit_draft", lambda request, target_day: (None, {"prompt_tokens": 0, "completion_tokens": 0}))
     original_itinerary = generate_trip_itinerary(build_trip_request())
 
@@ -151,8 +151,9 @@ def test_edit_trip_itinerary_can_replace_first_spot_with_free_time(monkeypatch) 
 
     updated_itinerary = edit_trip_itinerary(edit_request)
 
-    assert updated_itinerary.days[1].spots[0].name == "自由活动 / 弹性安排"
-    assert "减少固定景点安排" in updated_itinerary.days[1].spots[0].description
+    assert updated_itinerary.days[1].spots == []
+    assert updated_itinerary.days[1].transport == []
+    assert "已根据你的要求取消固定景点，保留自由活动时间。" in updated_itinerary.days[1].notes
 
 
 def test_edit_trip_itinerary_can_apply_llm_day_edit(monkeypatch) -> None:

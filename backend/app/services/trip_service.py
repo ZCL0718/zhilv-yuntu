@@ -3,8 +3,11 @@ from __future__ import annotations
 from datetime import date as DateType, timedelta
 
 from app.agents.trip_planner_agent import (
+    DynamicPlannerDayDraft,
+    DynamicPlannerDraft,
     collect_trip_context,
     generate_day_edit_draft,
+    generate_dynamic_planner_draft,
     generate_planner_draft,
 )
 from app.config import ENABLE_AMAP_ENRICHMENT
@@ -22,6 +25,11 @@ from app.models.schemas import (
 )
 from app.services.map_service import enrich_itinerary_with_map_data
 from app.services.fallback_candidates import extract_fallback_candidates
+from app.services.place_candidate_service import (
+    CityCandidatePool,
+    PlaceCandidate,
+    PlaceCandidateCategory,
+)
 
 
 TECHNICAL_TIP_KEYWORDS = (
@@ -59,6 +67,21 @@ def _clean_user_tips(tips: list[str], destination: str | None = None) -> list[st
         "古镇、生态廊道和石板路更适合慢慢走，鞋子尽量选择舒适防滑的款式。",
         "热门景点建议错峰出发，给拍照、用餐和交通预留更从容的缓冲时间。",
     ]
+
+
+def _requests_no_fixed_spot(instruction: str) -> bool:
+    """识别明确取消景点的指令，避免把“不要安排太满”误判为空行程。"""
+    normalized = "".join(instruction.split())
+    return any(
+        phrase in normalized
+        for phrase in (
+            "不要安排景点",
+            "不安排景点",
+            "取消景点",
+            "不去景点",
+            "改成自由活动",
+        )
+    )
 
 
 def _stable_bucket(text: str, modulo: int) -> int:
@@ -213,6 +236,268 @@ def _maybe_enrich_itinerary_with_map_data(
             pass
 
     return _refresh_budget_breakdown(itinerary, request_budget=request_budget)
+
+
+def _validated_dynamic_draft(
+    draft: DynamicPlannerDraft | None,
+    candidate_pool: CityCandidatePool,
+    day_count: int,
+) -> DynamicPlannerDraft | None:
+    """拒绝包含候选池外 ID 或重复 day_index 的动态 Planner 结果。"""
+    if draft is None:
+        return None
+
+    candidate_ids = {
+        category: {
+            candidate.poi_id
+            for candidate in candidate_pool.candidates_for(category)
+        }
+        for category in PlaceCandidateCategory
+    }
+    if draft.hotel_poi_id not in candidate_ids[PlaceCandidateCategory.HOTEL]:
+        return None
+    if sorted(day.day_index for day in draft.days) != list(range(1, day_count + 1)):
+        return None
+
+    for day in draft.days:
+        if day.spot_poi_id not in candidate_ids[PlaceCandidateCategory.SPOT]:
+            return None
+        if day.meal_poi_id not in candidate_ids[PlaceCandidateCategory.MEAL]:
+            return None
+
+    return draft
+
+
+def _candidate_map(
+    candidate_pool: CityCandidatePool,
+    category: PlaceCandidateCategory,
+) -> dict[str, PlaceCandidate]:
+    return {
+        candidate.poi_id: candidate
+        for candidate in candidate_pool.candidates_for(category)
+    }
+
+
+def generate_dynamic_trip_itinerary(
+    request: TripRequest,
+    candidate_pool: CityCandidatePool,
+) -> Itinerary:
+    """使用地图候选生成动态城市行程，所有展示实体都由 POI ID 回填。"""
+    day_count = max((request.end_date - request.start_date).days + 1, 1)
+    raw_draft, planner_usage = generate_dynamic_planner_draft(
+        request=request,
+        candidate_pool=candidate_pool,
+        day_count=day_count,
+    )
+    draft = _validated_dynamic_draft(raw_draft, candidate_pool, day_count)
+
+    spots = candidate_pool.candidates_for(PlaceCandidateCategory.SPOT)
+    meals = candidate_pool.candidates_for(PlaceCandidateCategory.MEAL)
+    hotels = candidate_pool.candidates_for(PlaceCandidateCategory.HOTEL)
+    if not spots or not meals or not hotels:
+        raise ValueError("动态城市候选池缺少景点、餐饮或住宿，无法生成行程。")
+
+    spot_by_id = _candidate_map(candidate_pool, PlaceCandidateCategory.SPOT)
+    meal_by_id = _candidate_map(candidate_pool, PlaceCandidateCategory.MEAL)
+    hotel_by_id = _candidate_map(candidate_pool, PlaceCandidateCategory.HOTEL)
+    selected_hotel = (
+        hotel_by_id[draft.hotel_poi_id]
+        if draft is not None
+        else hotels[0]
+    )
+
+    selected_days: list[
+        tuple[PlaceCandidate, PlaceCandidate, DynamicPlannerDayDraft | None]
+    ] = []
+    ticket_costs: list[float] = []
+    for index in range(day_count):
+        day_number = index + 1
+        planner_day = (
+            next((day for day in draft.days if day.day_index == day_number), None)
+            if draft is not None
+            else None
+        )
+        selected_spot = (
+            spot_by_id[planner_day.spot_poi_id]
+            if planner_day is not None
+            else spots[index % len(spots)]
+        )
+        selected_meal = (
+            meal_by_id[planner_day.meal_poi_id]
+            if planner_day is not None
+            else meals[index % len(meals)]
+        )
+        selected_days.append((selected_spot, selected_meal, planner_day))
+        ticket_costs.append(
+            _estimate_ticket_cost(selected_spot.name, selected_spot.type_name)
+        )
+
+    ticket_total = round(sum(ticket_costs), 2)
+    target_total = request.budget * (
+        0.78 if request.pace == "轻松" else 0.92 if request.pace == "紧凑" else 0.85
+    )
+    other_budget = round(request.budget * (0.05 + min(day_count, 4) * 0.01), 2)
+    allocatable_budget = max(
+        target_total - ticket_total - other_budget,
+        request.budget * 0.45,
+    )
+
+    hotel_level = request.hotel_level or "舒适型"
+    if "豪华" in hotel_level:
+        hotel_ratio = 0.62
+    elif "高档" in hotel_level or "高端" in hotel_level:
+        hotel_ratio = 0.56
+    elif "经济" in hotel_level:
+        hotel_ratio = 0.40
+    else:
+        hotel_ratio = 0.50
+    meal_ratio = 0.28 if "美食" in request.preferences else 0.22
+    transport_ratio = max(0.12, 1 - hotel_ratio - meal_ratio)
+    ratio_sum = hotel_ratio + meal_ratio + transport_ratio
+
+    daily_hotel_costs = _prorate_amounts(
+        allocatable_budget * hotel_ratio / ratio_sum,
+        _build_hotel_weights(day_count, request.start_date),
+    )
+    daily_meal_costs = _prorate_amounts(
+        allocatable_budget * meal_ratio / ratio_sum,
+        _build_meal_weights(day_count, request.preferences),
+    )
+    daily_transport_costs = _prorate_amounts(
+        allocatable_budget * transport_ratio / ratio_sum,
+        _build_transport_weights(day_count, request.pace),
+    )
+
+    days: list[DayPlan] = []
+    for index, (spot, meal, planner_day) in enumerate(selected_days):
+        spot_reason = (
+            planner_day.spot_reason
+            if planner_day is not None
+            else "该地点来自当前城市的高德 POI 候选池。"
+        )
+        meal_notes = (
+            planner_day.meal_notes
+            if planner_day is not None
+            else "餐厅来自当前城市的高德 POI 候选池，请以实际营业信息为准。"
+        )
+        daily_note = (
+            planner_day.daily_note
+            if planner_day is not None
+            else "按真实地点候选安排，出发前请再次确认开放时间和交通情况。"
+        )
+        theme = (
+            planner_day.theme
+            if planner_day is not None
+            else f"{request.destination}第 {index + 1} 天探索"
+        )
+        current_date = request.start_date + timedelta(days=index)
+        days.append(
+            DayPlan(
+                day_index=index + 1,
+                date=current_date,
+                theme=theme,
+                spots=[
+                    SpotItem(
+                        name=spot.name,
+                        start_time=(
+                            planner_day.spot_start_time
+                            if planner_day is not None
+                            else "10:00"
+                        ),
+                        end_time=(
+                            planner_day.spot_end_time
+                            if planner_day is not None
+                            else "12:00"
+                        ),
+                        description=spot_reason,
+                        estimated_cost=ticket_costs[index],
+                        location=spot.district or spot.city or request.destination,
+                        image_url=spot.image_url,
+                        address=spot.address,
+                        latitude=spot.latitude,
+                        longitude=spot.longitude,
+                        poi_id=spot.poi_id,
+                    )
+                ],
+                meals=[
+                    MealItem(
+                        name=meal.name,
+                        meal_type="午餐",
+                        estimated_cost=daily_meal_costs[index],
+                        notes=meal_notes,
+                        address=meal.address,
+                        latitude=meal.latitude,
+                        longitude=meal.longitude,
+                        poi_id=meal.poi_id,
+                        image_url=meal.image_url,
+                    )
+                ],
+                hotel=HotelItem(
+                    name=selected_hotel.name,
+                    level=hotel_level,
+                    estimated_cost=daily_hotel_costs[index],
+                    location=(
+                        selected_hotel.district
+                        or selected_hotel.city
+                        or request.destination
+                    ),
+                    address=selected_hotel.address,
+                    latitude=selected_hotel.latitude,
+                    longitude=selected_hotel.longitude,
+                    poi_id=selected_hotel.poi_id,
+                    image_url=selected_hotel.image_url,
+                ),
+                transport=[
+                    TransportItem(
+                        mode="公共交通 / 打车",
+                        from_place=selected_hotel.name,
+                        to_place=spot.name,
+                        estimated_cost=daily_transport_costs[index],
+                        duration="请以实时地图路线为准",
+                    )
+                ],
+                notes=[
+                    f"当前旅行节奏：{request.pace or '适中'}",
+                    daily_note,
+                    "门票、餐饮、住宿和交通金额均为预算估算，不代表实时可订价格。",
+                ],
+            )
+        )
+
+    preference_text = "、".join(request.preferences) if request.preferences else "常规旅行体验"
+    summary = (
+        draft.summary
+        if draft is not None
+        else f"这是一份为{request.destination}生成的 {day_count} 日动态行程，偏好重点为：{preference_text}。"
+    )
+    tips = _clean_user_tips(
+        draft.tips if draft is not None else [],
+        request.destination,
+    )
+    source_notes = [
+        "本行程的景点、餐饮和住宿实体均由本次高德 POI 候选池回填。",
+        "预算为规划估算，地点开放、营业和可订状态请以出发前实时信息为准。",
+    ]
+    if raw_draft is not None and draft is None:
+        source_notes.append("动态 Planner 返回了候选池外数据，已自动改用真实候选规则方案。")
+    elif draft is None:
+        source_notes.append("动态 Planner 当前不可用，已使用真实 POI 候选生成规则方案。")
+
+    itinerary = Itinerary(
+        trip_id=f"trip_{request.destination}_{request.start_date.isoformat()}",
+        destination=request.destination,
+        summary=summary,
+        days=days,
+        estimated_budget=0.0,
+        budget_breakdown=BudgetBreakdown(),
+        tips=tips,
+        source_notes=source_notes,
+        token_usage=TokenUsage(
+            planner_prompt_tokens=planner_usage.get("prompt_tokens", 0),
+            planner_completion_tokens=planner_usage.get("completion_tokens", 0),
+        ),
+    )
+    return _refresh_budget_breakdown(itinerary, request_budget=request.budget)
 
 
 def generate_trip_itinerary(request: TripRequest) -> Itinerary:
@@ -500,22 +785,37 @@ def edit_trip_itinerary(request: TripEditRequest) -> Itinerary:
     llm_edit_applied = False
     edit_token_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     if target_day is not None:
+        day_uses_candidate_pool = bool(
+            target_day.hotel is not None
+            and target_day.hotel.poi_id
+            and target_day.spots
+            and target_day.spots[0].poi_id
+            and target_day.meals
+            and target_day.meals[0].poi_id
+        )
         day_edit_draft, edit_token_usage = generate_day_edit_draft(request, target_day)
         if day_edit_draft is not None:
             target_day.theme = day_edit_draft.theme
             if target_day.spots:
-                target_day.spots[0].name = day_edit_draft.spot_name
+                spot_is_grounded = (
+                    day_uses_candidate_pool
+                    and target_day.spots[0].poi_id is not None
+                )
+                if not spot_is_grounded:
+                    target_day.spots[0].name = day_edit_draft.spot_name
                 target_day.spots[0].description = day_edit_draft.spot_description
                 target_day.spots[0].estimated_cost = _estimate_ticket_cost(
-                    day_edit_draft.spot_name,
+                    target_day.spots[0].name,
                     day_edit_draft.spot_description,
                 )
-                target_day.spots[0].address = None
-                target_day.spots[0].latitude = None
-                target_day.spots[0].longitude = None
-                target_day.spots[0].poi_id = None
+                if not spot_is_grounded:
+                    target_day.spots[0].address = None
+                    target_day.spots[0].latitude = None
+                    target_day.spots[0].longitude = None
+                    target_day.spots[0].poi_id = None
             if target_day.meals:
-                target_day.meals[0].name = day_edit_draft.meal_name
+                if not day_uses_candidate_pool:
+                    target_day.meals[0].name = day_edit_draft.meal_name
                 target_day.meals[0].notes = day_edit_draft.meal_notes
 
             if target_day.notes:
@@ -529,14 +829,18 @@ def edit_trip_itinerary(request: TripEditRequest) -> Itinerary:
                 target_day.theme = f"{target_day.theme}（已调整为更轻松）"
                 target_day.notes.append("已根据用户要求把节奏调整得更轻松。")
 
-            if "不要安排" in request.user_instruction and target_day.spots:
-                target_day.spots[0].name = "自由活动 / 弹性安排"
-                target_day.spots[0].description = "根据用户要求，减少固定景点安排，保留更多自由活动时间。"
-                target_day.spots[0].estimated_cost = 0.0
-                target_day.spots[0].address = None
-                target_day.spots[0].latitude = None
-                target_day.spots[0].longitude = None
-                target_day.spots[0].poi_id = None
+        if _requests_no_fixed_spot(request.user_instruction):
+            removed_spot_names = {spot.name for spot in target_day.spots}
+            target_day.spots = []
+            target_day.transport = [
+                transport
+                for transport in target_day.transport
+                if transport.from_place not in removed_spot_names
+                and transport.to_place not in removed_spot_names
+            ]
+            target_day.notes.append(
+                "已根据你的要求取消固定景点，保留自由活动时间。"
+            )
 
     updated_itinerary.source_notes.append(
         f"已根据用户编辑指令更新行程：{request.user_instruction}"

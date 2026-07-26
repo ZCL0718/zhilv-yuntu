@@ -4,7 +4,10 @@ import { computed, reactive, ref } from "vue";
 import { message } from "ant-design-vue";
 
 import { generateTrip } from "../services/api";
-import type { Itinerary, TripRequestPayload } from "../types";
+import type {
+  Itinerary,
+  TripRequestPayload,
+} from "../types";
 
 const emit = defineEmits<{
   generated: [itinerary: Itinerary];
@@ -66,6 +69,21 @@ function togglePreference(list: string[], value: string) {
   }
 }
 
+function getBackendErrorMessage(data: unknown): string | null {
+  if (!data || typeof data !== "object" || !("detail" in data)) {
+    return null;
+  }
+
+  const detail = data.detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (detail && typeof detail === "object" && "message" in detail) {
+    return typeof detail.message === "string" ? detail.message : null;
+  }
+  return null;
+}
+
 async function handleSubmit() {
   const payload: TripRequestPayload = {
     destination: formState.destination,
@@ -91,7 +109,8 @@ async function handleSubmit() {
       if (error.code === "ECONNABORTED") {
         message.error("行程生成超时，模型返回较慢，请稍后再试。");
       } else if (error.response) {
-        message.error(`行程生成失败：后端返回 ${error.response.status}。`);
+        const backendMessage = getBackendErrorMessage(error.response.data);
+        message.error(backendMessage ?? `行程生成失败：后端返回 ${error.response.status}。`);
       } else {
         message.error("行程生成失败，请检查前端到后端的连接。");
       }

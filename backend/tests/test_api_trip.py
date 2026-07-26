@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 
 from fastapi.testclient import TestClient
+import pytest
 
 
 # 允许测试文件直接导入 backend/app 下的模块。
@@ -12,7 +13,21 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.api.main import app  # noqa: E402
 import app.api.routes.export as export_route  # noqa: E402
+import app.api.routes.trip as trip_route  # noqa: E402
 import app.services.trip_service as trip_service  # noqa: E402
+from app.services.city_registry_service import (  # noqa: E402
+    CityCoverageTier,
+    CityKnowledgeStatus,
+)
+from app.services.city_resolver_service import (  # noqa: E402
+    CityResolutionResult,
+    CityResolutionUnavailableError,
+)
+from app.services.place_candidate_service import (  # noqa: E402
+    CandidateCollectionUnavailableError,
+    CityCandidatePool,
+    PlaceCandidateCategory,
+)
 
 client = TestClient(app)
 
@@ -31,6 +46,28 @@ def build_generate_payload() -> dict:
         "hotel_level": "舒适型",
         "special_notes": "不想太早起床，希望安排一个适合看日落的地点",
     }
+
+
+def build_candidate_pool(
+    spot_count: int = 8,
+    meal_count: int = 12,
+    hotel_count: int = 8,
+) -> CityCandidatePool:
+    """构造只用于接口分支测试的候选数量。"""
+    return CityCandidatePool(
+        city="上海",
+        adcode="310000",
+        candidates={
+            PlaceCandidateCategory.SPOT: [object()] * spot_count,
+            PlaceCandidateCategory.MEAL: [object()] * meal_count,
+            PlaceCandidateCategory.HOTEL: [object()] * hotel_count,
+        },
+        minimum_counts={
+            PlaceCandidateCategory.SPOT: 8,
+            PlaceCandidateCategory.MEAL: 12,
+            PlaceCandidateCategory.HOTEL: 8,
+        },
+    )
 
 
 def test_generate_trip_returns_itinerary_successfully() -> None:
@@ -57,6 +94,270 @@ def test_generate_trip_rejects_invalid_request() -> None:
     response = client.post("/trip/generate", json=payload)
 
     assert response.status_code == 422
+
+
+def test_generate_trip_returns_dynamic_itinerary_from_candidate_pool(monkeypatch) -> None:
+    """候选覆盖达标的动态城市应调用独立服务并返回完整 itinerary。"""
+    captured_destination = ""
+    captured_pool = None
+    captured_candidate_kwargs: dict[str, object] = {}
+
+    def build_dynamic_itinerary(request, candidate_pool):
+        nonlocal captured_destination, captured_pool
+        captured_destination = request.destination
+        captured_pool = candidate_pool
+        return {
+            "trip_id": "trip_shanghai_dynamic",
+            "destination": request.destination,
+            "summary": "上海动态旅行方案",
+            "days": [],
+            "estimated_budget": 0,
+            "budget_breakdown": {
+                "transport": 0,
+                "hotel": 0,
+                "meals": 0,
+                "tickets": 0,
+                "other": 0,
+                "total": 0,
+            },
+            "tips": [],
+            "source_notes": ["实体来自高德 POI 候选池。"],
+        }
+
+    monkeypatch.setattr(
+        trip_route,
+        "generate_dynamic_trip_itinerary",
+        build_dynamic_itinerary,
+    )
+    monkeypatch.setattr(
+        trip_route,
+        "resolve_city",
+        lambda _destination: CityResolutionResult(
+            requested_city="上海",
+            city="上海",
+            tier=CityCoverageTier.DYNAMIC,
+            knowledge_status=CityKnowledgeStatus.UNREGISTERED,
+            source_type="amap_district",
+            adcode="310000",
+            administrative_level="province",
+        ),
+    )
+    monkeypatch.setattr(
+        trip_route,
+        "collect_city_candidate_pool",
+        lambda **kwargs: (
+            captured_candidate_kwargs.update(kwargs) or build_candidate_pool()
+        ),
+    )
+    payload = build_generate_payload()
+    payload["destination"] = " 上海市 "
+
+    response = client.post("/trip/generate", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["destination"] == "上海"
+    assert data["trip_id"] == "trip_shanghai_dynamic"
+    assert captured_destination == "上海"
+    assert captured_pool is not None
+    assert captured_candidate_kwargs == {
+        "city": "上海",
+        "adcode": "310000",
+        "administrative_level": "province",
+    }
+
+
+def test_generate_trip_rejects_dynamic_city_with_candidate_shortage(monkeypatch) -> None:
+    """动态城市候选不足时不得继续调用 Planner。"""
+    monkeypatch.setattr(
+        trip_route,
+        "resolve_city",
+        lambda _destination: CityResolutionResult(
+            requested_city="上海",
+            city="上海",
+            tier=CityCoverageTier.DYNAMIC,
+            knowledge_status=CityKnowledgeStatus.UNREGISTERED,
+            source_type="amap_district",
+            adcode="310000",
+        ),
+    )
+    monkeypatch.setattr(
+        trip_route,
+        "collect_city_candidate_pool",
+        lambda **_kwargs: build_candidate_pool(meal_count=4, hotel_count=3),
+    )
+    monkeypatch.setattr(
+        trip_route,
+        "generate_dynamic_trip_itinerary",
+        lambda _request, _candidate_pool: pytest.fail(
+            "候选不足时不应调用动态行程服务"
+        ),
+    )
+    payload = build_generate_payload()
+    payload["destination"] = "上海"
+
+    response = client.post("/trip/generate", json=payload)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "insufficient_candidate_data"
+    assert detail["candidate_counts"] == {"spot": 8, "meal": 4, "hotel": 3}
+    assert detail["shortages"] == {"meal": 8, "hotel": 5}
+
+
+def test_generate_trip_returns_503_when_candidate_collection_fails(monkeypatch) -> None:
+    """候选采集故障应返回独立的 503 错误码。"""
+    monkeypatch.setattr(
+        trip_route,
+        "resolve_city",
+        lambda _destination: CityResolutionResult(
+            requested_city="上海",
+            city="上海",
+            tier=CityCoverageTier.DYNAMIC,
+            knowledge_status=CityKnowledgeStatus.UNREGISTERED,
+            source_type="amap_district",
+            adcode="310000",
+        ),
+    )
+    monkeypatch.setattr(
+        trip_route,
+        "collect_city_candidate_pool",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            CandidateCollectionUnavailableError(
+                "暂时无法获取上海候选，请稍后重试。",
+                reason="10003",
+                category="spot",
+            )
+        ),
+    )
+    payload = build_generate_payload()
+    payload["destination"] = "上海"
+
+    response = client.post("/trip/generate", json=payload)
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["code"] == "candidate_collection_unavailable"
+    assert detail["destination"] == "上海"
+    assert detail["reason"] == "10003"
+    assert detail["category"] == "spot"
+
+
+def test_generate_trip_rejects_city_with_insufficient_data(monkeypatch) -> None:
+    """无法确认的目的地返回资料不足，不进入规划。"""
+    monkeypatch.setattr(
+        trip_route,
+        "resolve_city",
+        lambda _destination: CityResolutionResult(
+            requested_city="不存在的旅游城市",
+            city="不存在的旅游城市",
+            tier=CityCoverageTier.INSUFFICIENT_DATA,
+            knowledge_status=CityKnowledgeStatus.UNREGISTERED,
+            source_type="amap_district",
+        ),
+    )
+    payload = build_generate_payload()
+    payload["destination"] = "不存在的旅游城市"
+
+    response = client.post("/trip/generate", json=payload)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "insufficient_city_data"
+    assert detail["coverage_tier"] == "insufficient_data"
+
+
+def test_generate_trip_rejects_province_before_candidate_collection(monkeypatch) -> None:
+    """省级目的地应提示输入具体城市，不得进入动态候选采集。"""
+    monkeypatch.setattr(
+        trip_route,
+        "resolve_city",
+        lambda _destination: CityResolutionResult(
+            requested_city="青海",
+            city="青海省",
+            tier=CityCoverageTier.INSUFFICIENT_DATA,
+            knowledge_status=CityKnowledgeStatus.UNREGISTERED,
+            source_type="amap_district",
+            adcode="630000",
+            administrative_level="province",
+            resolution_reason="province_requires_city",
+        ),
+    )
+    monkeypatch.setattr(
+        trip_route,
+        "collect_city_candidate_pool",
+        lambda **_kwargs: pytest.fail("省级目的地不应采集单城市候选"),
+    )
+    payload = build_generate_payload()
+    payload["destination"] = "青海"
+
+    response = client.post("/trip/generate", json=payload)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "unsupported_destination_scope"
+    assert detail["administrative_level"] == "province"
+    assert "西宁" in detail["message"]
+
+
+def test_generate_trip_returns_503_when_city_resolution_is_unavailable(monkeypatch) -> None:
+    """地图解析故障与资料不足必须使用不同的错误语义。"""
+    monkeypatch.setattr(
+        trip_route,
+        "resolve_city",
+        lambda _destination: (_ for _ in ()).throw(
+            CityResolutionUnavailableError(
+                "暂时无法确认目的地“上海”，请稍后重试。",
+                reason="request_timeout",
+            )
+        ),
+    )
+    payload = build_generate_payload()
+    payload["destination"] = "上海"
+
+    response = client.post("/trip/generate", json=payload)
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["code"] == "city_resolution_unavailable"
+    assert "请稍后重试" in detail["message"]
+    assert detail["reason"] == "request_timeout"
+
+
+def test_generate_trip_normalizes_registered_city_before_planning(monkeypatch) -> None:
+    """已收录城市的常见别名应规范化后继续原有生成链路。"""
+    captured_destination = ""
+
+    def build_minimal_itinerary(request):
+        nonlocal captured_destination
+        captured_destination = request.destination
+        return {
+            "trip_id": "trip_beijing_alias",
+            "destination": request.destination,
+            "summary": "北京旅行计划",
+            "days": [],
+            "estimated_budget": 0,
+            "budget_breakdown": {
+                "transport": 0,
+                "hotel": 0,
+                "meals": 0,
+                "tickets": 0,
+                "other": 0,
+                "total": 0,
+            },
+            "tips": [],
+            "source_notes": [],
+        }
+
+    monkeypatch.setattr(trip_route, "generate_trip_itinerary", build_minimal_itinerary)
+    payload = build_generate_payload()
+    payload["destination"] = " 北京市 "
+
+    response = client.post("/trip/generate", json=payload)
+
+    assert response.status_code == 200
+    assert captured_destination == "北京"
+    assert response.json()["destination"] == "北京"
 
 
 def test_root_endpoint_returns_running_message() -> None:

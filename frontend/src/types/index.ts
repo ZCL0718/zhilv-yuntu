@@ -38,6 +38,11 @@ export interface MealItem {
   meal_type: string;
   estimated_cost?: number;
   notes?: string | null;
+  address?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  poi_id?: string | null;
+  image_url?: string | null;
 }
 
 export interface HotelItem {
@@ -48,6 +53,8 @@ export interface HotelItem {
   address?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  poi_id?: string | null;
+  image_url?: string | null;
 }
 
 export interface TransportItem {

@@ -19,6 +19,11 @@ from app.models.schemas import (  # noqa: E402
     TripEditRequest,
     TripRequest,
 )
+from app.services.place_candidate_service import (  # noqa: E402
+    CityCandidatePool,
+    PlaceCandidate,
+    PlaceCandidateCategory,
+)
 
 
 def build_trip_request() -> TripRequest:
@@ -54,6 +59,33 @@ def build_planner_draft(day_count: int) -> trip_planner_agent.PlannerDraft:
             )
             for index in range(day_count)
         ],
+    )
+
+
+def build_dynamic_candidate_pool() -> CityCandidatePool:
+    """构造动态 Planner 使用的真实 POI 候选结构。"""
+    candidates = {}
+    for category in PlaceCandidateCategory:
+        candidates[category] = [
+            PlaceCandidate(
+                poi_id=f"{category.value}_{index}",
+                name=f"上海{category.value}地点{index}",
+                category=category,
+                address=f"上海市测试路{index}号",
+                city="上海市",
+                district="黄浦区",
+                type_name=f"测试{category.value}类型",
+                latitude=31.2 + index / 1000,
+                longitude=121.4 + index / 1000,
+                image_url=None,
+            )
+            for index in range(1, 4)
+        ]
+    return CityCandidatePool(
+        city="上海",
+        adcode="310000",
+        candidates=candidates,
+        minimum_counts={category: 1 for category in PlaceCandidateCategory},
     )
 
 
@@ -220,6 +252,57 @@ def test_generate_planner_draft_returns_none_when_day_count_mismatches(monkeypat
     )
 
     assert result is None
+
+
+def test_generate_dynamic_planner_draft_uses_poi_id_candidates(monkeypatch) -> None:
+    """动态 Planner 提示词应提供真实候选，并解析只含 POI ID 的草稿。"""
+    monkeypatch.setattr(trip_planner_agent, "LLM_API_KEY", "test-key")
+    expected_result = trip_planner_agent.DynamicPlannerDraft(
+        summary="上海三日动态方案",
+        tips=["提前确认开放时间。"],
+        hotel_poi_id="hotel_1",
+        days=[
+            trip_planner_agent.DynamicPlannerDayDraft(
+                day_index=index,
+                theme=f"主题{index}",
+                spot_poi_id=f"spot_{index}",
+                spot_reason=f"理由{index}",
+                meal_poi_id=f"meal_{index}",
+                meal_notes=f"餐饮说明{index}",
+                daily_note=f"日程说明{index}",
+            )
+            for index in range(1, 4)
+        ],
+    )
+    FakeChatOpenAI, _ = install_fake_langchain_openai(monkeypatch, expected_result)
+    request = build_trip_request().model_copy(update={"destination": "上海"})
+
+    result, usage = trip_planner_agent.generate_dynamic_planner_draft(
+        request=request,
+        candidate_pool=build_dynamic_candidate_pool(),
+        day_count=3,
+    )
+
+    assert result == expected_result
+    assert usage == {"prompt_tokens": 100, "completion_tokens": 50}
+    assert FakeChatOpenAI.last_messages is not None
+    assert "spot_1" in FakeChatOpenAI.last_messages[1][1]
+    assert "hotel_1" in FakeChatOpenAI.last_messages[1][1]
+    assert "禁止自行创造或改写 poi_id" in FakeChatOpenAI.last_messages[0][1]
+
+
+def test_generate_dynamic_planner_draft_returns_none_without_api_key(monkeypatch) -> None:
+    """没有模型配置时，动态 Planner 应交由服务层执行真实候选降级。"""
+    monkeypatch.setattr(trip_planner_agent, "LLM_API_KEY", "")
+
+    result, usage = trip_planner_agent.generate_dynamic_planner_draft(
+        request=build_trip_request().model_copy(update={"destination": "上海"}),
+        candidate_pool=build_dynamic_candidate_pool(),
+        day_count=3,
+    )
+
+    assert result is None
+    assert usage == {"prompt_tokens": 0, "completion_tokens": 0}
 
 
 def test_generate_day_edit_draft_accepts_nested_day_shape(monkeypatch) -> None:

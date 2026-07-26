@@ -19,10 +19,21 @@ from app.services.cache_service import get_cached_json, set_cached_json
 logger = logging.getLogger(__name__)
 
 
+class AmapServiceError(RuntimeError):
+    """不包含 API Key 等敏感请求信息的高德服务错误。"""
+
+    def __init__(self, message: str, reason: str | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 def _ensure_amap_api_key() -> None:
     """确保当前环境已经配置高德地图 Key。"""
     if not AMAP_API_KEY:
-        raise RuntimeError("当前环境未配置 AMAP_API_KEY，无法调用高德地图服务。")
+        raise AmapServiceError(
+            "当前环境未配置 AMAP_API_KEY，无法调用高德地图服务。",
+            reason="missing_api_key",
+        )
 
 
 def _build_client() -> httpx.Client:
@@ -39,14 +50,45 @@ def _request_amap(path: str, params: dict[str, Any]) -> dict[str, Any]:
         **params,
     }
 
-    with _build_client() as client:
-        response = client.get(f"{AMAP_BASE_URL}{path}", params=request_params)
-        response.raise_for_status()
-        payload = response.json()
+    try:
+        with _build_client() as client:
+            response = client.get(f"{AMAP_BASE_URL}{path}", params=request_params)
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.TimeoutException as exc:
+        raise AmapServiceError(
+            "高德地图接口请求超时。",
+            reason="request_timeout",
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        raise AmapServiceError(
+            f"高德地图接口返回 HTTP {exc.response.status_code}。",
+            reason=f"http_{exc.response.status_code}",
+        ) from exc
+    except httpx.RequestError as exc:
+        raise AmapServiceError(
+            "暂时无法连接高德地图接口。",
+            reason="request_error",
+        ) from exc
+    except ValueError as exc:
+        raise AmapServiceError(
+            "高德地图接口返回了无法解析的数据。",
+            reason="invalid_response",
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise AmapServiceError(
+            "高德地图接口返回了格式异常的数据。",
+            reason="invalid_response",
+        )
 
     if payload.get("status") != "1":
         info = payload.get("info", "未知错误")
-        raise RuntimeError(f"高德地图接口调用失败：{info}")
+        infocode = str(payload.get("infocode") or "amap_rejected")
+        raise AmapServiceError(
+            f"高德地图接口调用失败：{info}",
+            reason=infocode,
+        )
 
     return payload
 
@@ -115,14 +157,90 @@ def geocode_address(address: str, city: str | None = None) -> dict[str, Any] | N
     return result
 
 
+def resolve_administrative_area(keyword: str) -> dict[str, Any] | None:
+    """根据目的地名称查询高德行政区，确认城市或旅游目的地是否存在。"""
+    normalized_keyword = _normalize_cache_text(keyword)
+    cache_key = f"map:district:{normalized_keyword}"
+    cached_value = get_cached_json(cache_key)
+    if cached_value is not None:
+        logger.info("map district cache hit: keyword=%s", keyword)
+        return cached_value
+    logger.info("map district cache miss: keyword=%s", keyword)
+
+    payload = _request_amap(
+        "/config/district",
+        {
+            "keywords": keyword,
+            "subdistrict": 0,
+            "extensions": "base",
+        },
+    )
+
+    districts = payload.get("districts", [])
+    supported_levels = {"province", "city", "district"}
+    candidates = [
+        district
+        for district in districts
+        if isinstance(district, dict)
+        and district.get("name")
+        and district.get("level") in supported_levels
+    ]
+
+    selected: dict[str, Any] | None = None
+    for candidate in candidates:
+        candidate_name = _normalize_cache_text(str(candidate.get("name") or ""))
+        candidate_name_without_city = (
+            candidate_name[:-1] if candidate_name.endswith("市") else candidate_name
+        )
+        if candidate_name_without_city == normalized_keyword:
+            selected = candidate
+            break
+
+    if selected is None:
+        for candidate in candidates:
+            candidate_name = _normalize_cache_text(str(candidate.get("name") or ""))
+            if normalized_keyword in candidate_name:
+                selected = candidate
+                break
+
+    if selected is None:
+        return None
+
+    latitude, longitude = _split_location(selected.get("center"))
+    result = {
+        "name": selected.get("name"),
+        "adcode": selected.get("adcode"),
+        "citycode": selected.get("citycode"),
+        "level": selected.get("level"),
+        "latitude": latitude,
+        "longitude": longitude,
+    }
+    set_cached_json(cache_key, result, expire_seconds=REDIS_MAP_TTL_SECONDS)
+    return result
+
+
 def search_places(
-    keyword: str,
+    keyword: str = "",
     city: str | None = None,
     page_size: int = 5,
+    types: str | None = None,
+    page: int = 1,
+    city_limit: bool = False,
 ) -> list[dict[str, Any]]:
     """根据关键词搜索 POI。"""
+    if not keyword.strip() and not (types or "").strip():
+        raise ValueError("POI 搜索必须提供 keyword 或 types。")
+    if not 1 <= page_size <= 25:
+        raise ValueError("POI 搜索 page_size 必须在 1 到 25 之间。")
+    if page < 1:
+        raise ValueError("POI 搜索 page 必须大于等于 1。")
+
     cache_key = (
-        f"map:place:{_normalize_cache_text(keyword)}:{_normalize_cache_text(city or AMAP_DEFAULT_CITY)}:{page_size}"
+        "map:place:"
+        f"{_normalize_cache_text(keyword)}:"
+        f"{_normalize_cache_text(types)}:"
+        f"{_normalize_cache_text(city or AMAP_DEFAULT_CITY)}:"
+        f"{page_size}:{page}:{city_limit}"
     )
     cached_value = get_cached_json(cache_key)
     if cached_value is not None:
@@ -130,16 +248,19 @@ def search_places(
         return cached_value
     logger.info("map place cache miss: keyword=%s city=%s", keyword, city or AMAP_DEFAULT_CITY)
 
-    payload = _request_amap(
-        "/place/text",
-        {
-            "keywords": keyword,
-            "city": city or AMAP_DEFAULT_CITY,
-            "offset": page_size,
-            "page": 1,
-            "extensions": "all",
-        },
-    )
+    request_params: dict[str, Any] = {
+        "keywords": keyword,
+        "city": city or AMAP_DEFAULT_CITY,
+        "offset": page_size,
+        "page": page,
+        "extensions": "all",
+    }
+    if types:
+        request_params["types"] = types
+    if city_limit:
+        request_params["citylimit"] = "true"
+
+    payload = _request_amap("/place/text", request_params)
 
     pois = payload.get("pois", [])
     results: list[dict[str, Any]] = []
@@ -151,8 +272,10 @@ def search_places(
             {
                 "name": poi.get("name"),
                 "address": poi.get("address"),
+                "province": poi.get("pname"),
                 "cityname": poi.get("cityname"),
                 "adname": poi.get("adname"),
+                "adcode": poi.get("adcode"),
                 "type": poi.get("type"),
                 "poi_id": poi.get("id"),
                 "image_url": first_photo.get("url"),
@@ -289,6 +412,8 @@ def _enrich_hotel(hotel: HotelItem, city: str | None = None) -> bool:
     hotel.address = place.get("address") or hotel.address
     hotel.latitude = place.get("latitude")
     hotel.longitude = place.get("longitude")
+    hotel.poi_id = place.get("poi_id") or hotel.poi_id
+    hotel.image_url = place.get("image_url") or hotel.image_url
     return True
 
 
