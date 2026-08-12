@@ -136,6 +136,18 @@ def test_trip_request_rejects_negative_budget() -> None:
         )
 
 
+def test_trip_request_rejects_end_date_before_start_date() -> None:
+    '''测试 TripRequest 模型拒绝结束日期早于开始日期的请求'''
+    with pytest.raises(ValidationError):
+        TripRequest(
+            destination="大理",
+            start_date="2026-04-12",
+            end_date="2026-04-10",
+            travelers=2,
+            budget=3200,
+        )
+
+
 def test_itinerary_can_be_created_successfully() -> None:
     '''测试 Itinerary 模型能否成功创建'''
     itinerary = build_itinerary()
@@ -188,3 +200,5 @@ def test_trip_save_request_can_hold_full_itinerary() -> None:
     assert save_request.trip_id == "trip_dali_demo_001"
     assert save_request.itinerary.summary == "适合两人轻松游玩的 3 日行程示例。"
     assert save_request.user_id == "user_001"
+
+

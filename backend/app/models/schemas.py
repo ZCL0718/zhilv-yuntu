@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date as DateType, datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TripRequest(BaseModel):
@@ -20,6 +20,12 @@ class TripRequest(BaseModel):
     )
     hotel_level: str | None = Field(default=None, description="酒店档次偏好")
     special_notes: str | None = Field(default=None, description="额外要求")
+
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        if self.end_date < self.start_date:
+            raise ValueError("结束日期不能早于开始日期")
+        return self
 
 
 class TripEditRequest(BaseModel):

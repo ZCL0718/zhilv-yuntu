@@ -10,8 +10,13 @@ import type {
   WeatherForecastResponse,
 } from "../types";
 
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+
+// Treat the example value as unset so a local frontend can still reach the backend.
 export const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+  configuredApiBaseUrl && !configuredApiBaseUrl.includes("YOUR_SERVER_HOST")
+    ? configuredApiBaseUrl
+    : "http://localhost:8000";
 
 const api = axios.create({
   baseURL: API_BASE_URL,
