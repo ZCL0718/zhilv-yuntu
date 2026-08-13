@@ -6,6 +6,15 @@
 
 相比只输出一段文本的 LLM Demo，这个项目更强调完整链路落地：从 **行程生成、攻略检索、地图信息补全、天气补充，到历史管理与文档导出**，尽量把 AI 能力组织成一个可交互、可保存、可展示的产品原型。
 
+## 🛠️ 本地二次开发
+
+本仓库在原项目能力的基础上补充了两项面向 AI 工程可观测性与检索调试的改进：
+
+- **Token 统计前端面板**：复用后端 `GET /trip/stats` 接口，在导航栏新增“统计”页面。页面按已保存行程汇总总 Token、输入/输出 Token，并展示 Query Rewrite、Embedding、Rerank、Planner 四个阶段的消耗明细，便于分析 RAG 链路成本。
+- **RAG 调试目的地隔离**：`debug_rag_retrieval.py` 在调用 Retriever 时显式传递 `destination`，使调试脚本与线上检索链路一致地使用 Chroma `destination` metadata 过滤，降低跨城市攻略混入调试结果的风险。
+
+> 说明：Token 统计数据只来自已保存的行程；当模型、Embedding 或 Rerank 未实际调用，或缓存命中时，相应阶段的 Token 可能为 `0`。
+
 ## 📝 最近更新
 
 <details>
@@ -75,7 +84,7 @@
 - 🗺️ **高德地图接入**：补充景点地址、经纬度、POI ID、路线距离、耗时和景点图片，并支持虚线箭头路线可视化与 🚩 打卡标记
 - 🌦️ **天气感知提示**：前端展示天气预报，并根据雨天/阴天自动修正旅行提示
 - ⚡ **Redis 缓存层**：覆盖天气、地图、RAG 检索与 Rerank 结果缓存，减少重复外部调用开销
-- 📊 **Token 消耗统计**：按 Query Rewrite、Query Embedding、Rerank、Planner 分项统计输入/输出 token，并在后端日志与接口响应中返回总量
+- 📊 **Token 消耗统计与前端面板**：按 Query Rewrite、Query Embedding、Rerank、Planner 分项统计输入/输出 token；后端通过 `/trip/stats` 汇总，前端“统计”页展示总量、输入/输出量和逐行程明细
 - 💰 **预算拆分**：按交通、住宿、餐饮、门票、其他费用拆分，并支持按天展示
 - 🪄 **智能编辑**：支持用户用自然语言调整某一天行程
 - 🗂️ **历史管理**：支持保存、查看、打开、删除历史 itinerary
@@ -100,7 +109,7 @@
 
 | 层级 | 关键文件 | 职责 |
 | :--- | :--- | :--- |
-| 前端 | `frontend/src/views/*.vue` | 规划页、结果页、历史页展示与交互 |
+| 前端 | `frontend/src/views/*.vue` | 规划页、结果页、历史页、Token 统计页展示与交互 |
 | 接口层 | `backend/app/api/routes/` | trip、export、weather 路由 |
 | 服务层 | `backend/app/services/` | 城市解析、动态候选、行程编排、地图 enrich、天气、缓存、导出、存储 |
 | Agent 层 | `backend/app/agents/` | 本地 RAG Planner、动态 POI ID Planner、LLM-based Query Rewrite |
@@ -395,6 +404,7 @@ TripPlannerDemo/
 │   │   │   ├── Home.vue                 # 规划页面
 │   │   │   ├── Result.vue               # 行程结果页面
 │   │   │   └── History.vue              # 历史行程页面
+│   │   │   └── Stats.vue                # Token 统计页面
 │   │   ├── components/
 │   │   │   └── AmapTripMap.vue          # 地图展示组件
 │   │   ├── services/api.ts              # 后端接口封装
@@ -439,7 +449,7 @@ TripPlannerDemo/
 - `backend/app/services/storage_service.py`
   SQLite 数据保存、读取、历史列表和删除。
 - `backend/scripts/debug_rag_retrieval.py`
-  RAG 在线阶段调试，输出检索 query、top-k 召回片段、`rerank_score` 与 `rerank_reasons`。
+  RAG 在线阶段调试，输出检索 query、top-k 召回片段、`rerank_score` 与 `rerank_reasons`；显式传递 destination，复现线上目的地 metadata 过滤行为。
 - `backend/scripts/evaluate_rag_retrieval.py`
   RAG 检索效果评估，输出 Top1/TopK 命中率、MRR、Noise Rate、Latency 与跨目的地污染指标。
 - `backend/eval/rag_eval_cases.json`
@@ -455,6 +465,8 @@ TripPlannerDemo/
   结果展示页，承接 itinerary、地图、天气和导出交互。
 - `frontend/src/views/History.vue`
   历史列表页，支持查看、打开和删除历史行程。
+- `frontend/src/views/Stats.vue`
+  Token 统计页，调用 `/trip/stats` 并按行程与调用阶段展示 Token 消耗；支持刷新、空数据提示和接口失败提示。
 - `frontend/src/components/AmapTripMap.vue`
   高德地图组件，展示路线可视化与景点标记。
 
@@ -504,7 +516,18 @@ npm run dev
 
 前端地址：`http://127.0.0.1:5173`。
 
-#### 3. 可选：开启本地 Redis 缓存
+#### 3. 查看 Token 统计面板
+
+前端启动后，页面顶部会出现“统计”入口。使用步骤：
+
+1. 先生成并保存至少一条行程；
+2. 点击导航栏的“统计”；
+3. 查看总 Token、输入/输出 Token、统计行程数以及每条行程的阶段明细；
+4. 点击“刷新”重新读取后端的最新统计。
+
+统计面板调用 `GET /trip/stats`。若显示“还没有 Token 统计数据”，通常表示尚未保存行程，或所保存行程没有记录模型调用消耗。
+
+#### 4. 可选：开启本地 Redis 缓存
 
 默认 `REDIS_ENABLED=false`，即使未安装 Redis 也可以运行项目。若本机已安装 Redis，可运行 `redis-server`，再将 `backend/.env` 中的 `REDIS_ENABLED` 改为 `true`，以启用天气、地图和检索缓存。
 
@@ -677,6 +700,42 @@ written_count: 9
 
 ---
 
+## 📊 Token 统计与成本观测
+
+一次行程生成可能包含四个 AI 调用阶段：
+
+| 阶段 | 作用 | 统计字段 |
+| :--- | :--- | :--- |
+| Query Rewrite | 将目的地、偏好和备注整理为更适合检索的 query | `rewrite_*_tokens` |
+| Embedding | 将 query 转为向量，用于 Chroma 相似度检索 | `embedding_*_tokens` |
+| Rerank | 对召回到的攻略片段重新排序 | `rerank_*_tokens` |
+| Planner | 根据用户输入和 RAG 上下文生成结构化行程草稿 | `planner_*_tokens` |
+
+后端会将单次生成的 `token_usage` 放入 itinerary；行程保存后，`GET /trip/stats` 会聚合历史记录。前端“统计”页将这些数据拆分展示，帮助回答：哪一步 Token 占用最高、缓存是否减少了重复调用、不同类型行程的成本是否存在差异。
+
+### 调试 RAG 的目的地隔离
+
+使用脚本检查某个城市的检索结果：
+
+```powershell
+cd backend
+python scripts/debug_rag_retrieval.py `
+  --destination 大理 `
+  --preferences "拍照,自然风景" `
+  --pace 轻松 `
+  --top-k 5
+```
+
+脚本会将 `--destination` 传入 Retriever，进而使 Chroma 查询带上：
+
+```python
+where={"destination": "大理"}
+```
+
+因此，调试输出的攻略 Chunk 应来自当前目的地的资料。若出现其他城市的结果，应优先检查：攻略 Chunk 是否写入了 `destination` metadata、调用链是否持续传递该参数，以及关键词 fallback 是否也按目的地过滤。
+
+---
+
 ## 🧪 测试与验证
 
 ### 后端 API 测试
@@ -706,6 +765,17 @@ python test_map_service.py
 cd backend/scripts
 python test_trip_service_real.py
 ```
+
+### 前端类型检查
+
+修改前端页面、API 封装或 TypeScript 类型后，可执行：
+
+```powershell
+cd frontend
+npx vue-tsc --noEmit
+```
+
+该命令会检查 Token 统计页、接口响应类型及其它 Vue/TypeScript 文件是否一致。
 
 ---
 
