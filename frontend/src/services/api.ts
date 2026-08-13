@@ -7,6 +7,7 @@ import type {
   TripListResponse,
   TripRequestPayload,
   TripSaveResponse,
+  TokenStatsResponse,
   WeatherForecastResponse,
 } from "../types";
 
@@ -44,6 +45,11 @@ export async function saveTrip(itinerary: Itinerary): Promise<TripSaveResponse> 
 
 export async function listTrips(): Promise<TripListResponse> {
   const response = await api.get<TripListResponse>("/trip");
+  return response.data;
+}
+
+export async function getTokenStats(): Promise<TokenStatsResponse> {
+  const response = await api.get<TokenStatsResponse>("/trip/stats");
   return response.data;
 }
 

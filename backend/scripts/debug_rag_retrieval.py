@@ -52,7 +52,7 @@ def main() -> int:
         pace=args.pace or None,
         special_notes=args.special_notes or None,
     )
-    matched_chunks, rerank_usage, embedding_usage = retrieve_travel_guide_chunks(query=query, top_k=args.top_k)
+    matched_chunks, rerank_usage, embedding_usage = retrieve_travel_guide_chunks(query=query, top_k=args.top_k, destination=args.destination)
 
     print("=== RAG 检索调试 ===")
     print(f"destination: {args.destination}")
